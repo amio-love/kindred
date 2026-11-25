@@ -215,12 +215,13 @@ const STRONG_HANDLE_CUES: readonly RegExp[] = [
 
 const BARE_CN_CONTENT_CUE_RE = new RegExp(`(?:${CN_CONTENT_PLATS})\\s*(?:是|为|叫|[:：=])\\s*${WRAP}$`, 'i')
 const CN_CONTACT_SOLICIT_RE =
-  /互关|互粉|关注|求关|私信|私聊|来聊|聊聊|找我|加我|加个|滴滴|和我|联系|搜我|我的号|账号|帐号/
+  /互关|互粉|回关|求关注|关注我|私信|私聊|来聊|聊聊|找我|加我|加个|滴滴|和我聊|联系我|搜我|我的号|账号|帐号/
 
-function isChineseContentTopicClause(after: string): boolean {
-  const clause = after.split(/(?<!\d)\.(?!\d)|[。!！?？;；]/, 1)[0] ?? ''
-  if (CN_CONTACT_SOLICIT_RE.test(clause)) return false
-  return /[\u4e00-\u9fff]{2,}/.test(clause)
+function isBareContentHandleClause(after: string): boolean {
+  const clause = (after.split(/(?<!\d)\.(?!\d)|[。!！?？;；]/, 1)[0] ?? '').trim()
+  const stripped = clause.replace(/^[^A-Za-z0-9\u4e00-\u9fff]+/, '').trim()
+  if (!stripped) return true
+  return CN_CONTACT_SOLICIT_RE.test(stripped)
 }
 
 const TRAILING_BEFORE_RE = new RegExp(
@@ -316,7 +317,7 @@ export function scanPii(text: string): { clean: boolean; findings: PiiFinding[] 
           hasCueBefore(before, GENERAL_SHAPE_CUES) ||
           (strongShape && hasCueBefore(before, STRONG_HANDLE_CUES)) ||
           (BARE_CN_CONTENT_CUE_RE.test(before) &&
-            (tok.includes('_') || !isChineseContentTopicClause(after))) ||
+            (tok.includes('_') || isBareContentHandleClause(after))) ||
           (TRAILING_BEFORE_RE.test(before) && TRAILING_AFTER_RE.test(after.slice(0, 40)))
         ) {
           findings.push({ category: 'social_handle', excerpt: tok.slice(0, 32) })
