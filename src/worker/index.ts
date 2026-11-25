@@ -11,8 +11,9 @@ app.use(
   '*',
   cors({
     origin: '*',
-    allowMethods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
-    allowHeaders: ['Content-Type', 'Authorization', 'Mcp-Session-Id'],
+    allowMethods: ['GET', 'HEAD', 'POST', 'DELETE', 'OPTIONS'],
+    allowHeaders: ['Content-Type', 'Authorization', 'Mcp-Session-Id', 'Range'],
+    exposeHeaders: ['Content-Range', 'Accept-Ranges', 'Content-Length'],
   }),
 )
 
@@ -39,6 +40,67 @@ app.get('/img/:file', async (c) => {
       'Content-Type': 'image/svg+xml; charset=utf-8',
       'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; sandbox",
       'Cache-Control': 'no-store',
+    },
+  })
+})
+
+app.on(['GET', 'HEAD'], '/media/:file', async (c) => {
+  const assetReq = new Request(c.req.url, { method: 'GET' })
+  const assetRes = await c.env.ASSETS.fetch(assetReq)
+  if (!assetRes.ok) return assetRes
+
+  const contentType = assetRes.headers.get('Content-Type') ?? 'application/octet-stream'
+  const buf = await assetRes.arrayBuffer()
+  const total = buf.byteLength
+  const baseHeaders = {
+    'Content-Type': contentType,
+    'Accept-Ranges': 'bytes',
+    'Cache-Control': 'public, max-age=31536000, immutable',
+  }
+
+  const rangeHeader = c.req.header('Range')
+  if (rangeHeader) {
+    const match = /^bytes=(\d*)-(\d*)$/.exec(rangeHeader.trim())
+    if (!match) {
+      return new Response(null, {
+        status: 416,
+        headers: { 'Content-Range': `bytes */${total}` },
+      })
+    }
+    const rawStart = match[1]
+    const rawEnd = match[2]
+    let start: number
+    let end: number
+    if (rawStart === '' && rawEnd !== '') {
+      const suffix = Number(rawEnd)
+      start = Math.max(0, total - suffix)
+      end = total - 1
+    } else {
+      start = Number(rawStart)
+      end = rawEnd === '' ? total - 1 : Math.min(total - 1, Number(rawEnd))
+    }
+    if (!Number.isFinite(start) || !Number.isFinite(end) || start > end || start >= total) {
+      return new Response(null, {
+        status: 416,
+        headers: { 'Content-Range': `bytes */${total}` },
+      })
+    }
+    const slice = buf.slice(start, end + 1)
+    return new Response(c.req.method === 'HEAD' ? null : slice, {
+      status: 206,
+      headers: {
+        ...baseHeaders,
+        'Content-Range': `bytes ${start}-${end}/${total}`,
+        'Content-Length': String(slice.byteLength),
+      },
+    })
+  }
+
+  return new Response(c.req.method === 'HEAD' ? null : buf, {
+    status: 200,
+    headers: {
+      ...baseHeaders,
+      'Content-Length': String(total),
     },
   })
 })

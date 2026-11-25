@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
+import HeroVideo from './HeroVideo'
+import HostShowcase from './HostShowcase'
 import { COPY, detectInitialLocale, type Locale } from './i18n'
-import LiveStage from './LiveStage'
 import ResonanceCanvas from './ResonanceCanvas'
 import VisualStory from './VisualStory'
 import { registerKindredWebMcp } from './webmcp'
@@ -26,7 +27,7 @@ function fallbackCopy(text: string): boolean {
 export default function App() {
   const [locale, setLocale] = useState<Locale>(detectInitialLocale)
   const [copied, setCopied] = useState(false)
-  const [resonanceBoost, setResonanceBoost] = useState(0)
+  const [resonanceBoost, setResonanceBoost] = useState(0.25)
 
   useEffect(() => {
     const reg = registerKindredWebMcp()
@@ -56,14 +57,10 @@ export default function App() {
       setResonanceBoost(1)
       window.setTimeout(() => {
         setCopied(false)
-        setResonanceBoost(0.2)
+        setResonanceBoost(0.25)
       }, 2400)
     }
   }, [promptText])
-
-  const handleSceneChange = useCallback((idx: number) => {
-    setResonanceBoost(idx === 1 ? 0.9 : idx === 2 ? 0.55 : 0.2)
-  }, [])
 
   return (
     <div className="app">
@@ -132,20 +129,17 @@ export default function App() {
                 </button>
               </div>
 
+              <HostShowcase label={copy.worksWith} />
+
               <ul className="trust-row">
                 {copy.trustItems.map((item) => (
                   <li key={item}>{item}</li>
                 ))}
               </ul>
-
-              <div className="hosts-row">
-                <span className="hosts-label">{copy.worksWith}</span>
-                <span className="hosts-list">Meta Muse · ChatGPT · Claude · Grok · OpenClaw</span>
-              </div>
             </section>
 
             <section className="hero-stage" aria-label={copy.stageHeader}>
-              <LiveStage copy={copy} onSceneChange={handleSceneChange} />
+              <HeroVideo locale={locale} copy={copy} onResonanceBoost={setResonanceBoost} />
             </section>
           </main>
         </div>
