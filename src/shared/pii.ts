@@ -215,7 +215,7 @@ const STRONG_HANDLE_CUES: readonly RegExp[] = [
 
 const BARE_CN_CONTENT_CUE_RE = new RegExp(`(?:${CN_CONTENT_PLATS})\\s*(?:是|为|叫|[:：=])\\s*${WRAP}$`, 'i')
 const CN_CONTENT_TOPIC_AFTER_RE =
-  /^[ \t]*(?:[A-Za-z0-9+/.#-]{1,12}[ \t]+){0,2}(?!互关|关注|求关|私信|来聊|聊聊|找我|加我|滴滴)[\u4e00-\u9fff]{2,}/
+  /^[ \t]*(?:(?:[A-Za-z0-9+/.#-]{1,16}|[和与跟或比配的在用对](?=[ \t]*[A-Za-z0-9]))[ \t]*){0,4}(?!互关|互粉|关注|求关|私信|私聊|来聊|聊聊|找我|加我|滴滴|和我|联系)[\u4e00-\u9fff]{2,}/
 
 const TRAILING_BEFORE_RE = new RegExp(
   `\\b(?:i\\s+am|i['’]m|im|call\\s+me|find|add|dm|follow|reach|contact|message|search|check|it['’]s|its)\\s*${WRAP}$`,
@@ -254,7 +254,10 @@ function hasCueBefore(before: string, patterns: readonly RegExp[]): boolean {
 }
 
 export function scanPii(text: string): { clean: boolean; findings: PiiFinding[] } {
-  const normalized = text.normalize('NFKC').replace(ZERO_WIDTH_RE, '')
+  const normalized = text
+    .normalize('NFKC')
+    .replace(ZERO_WIDTH_RE, '')
+    .replace(/\r\n?|\u2028|\u2029/g, '\n')
   const findings: PiiFinding[] = []
 
   for (const { category, pattern } of DIRECT_PATTERNS) {
