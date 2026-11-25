@@ -131,7 +131,7 @@ const DIRECT_PATTERNS: ReadonlyArray<{ category: PiiFinding['category']; pattern
   },
   {
     category: 'social_handle',
-    pattern: /(?<![A-Za-z0-9._%+-])@[A-Za-z][A-Za-z0-9_.-]{2,31}\b/g,
+    pattern: /(?<![A-Za-z0-9._%+-])@_*[A-Za-z][A-Za-z0-9_.-]{2,31}\b/g,
   },
   {
     category: 'social_handle',
@@ -198,8 +198,7 @@ const EXPLICIT_IDENTITY_CUES: readonly RegExp[] = [
 ]
 
 const GENERAL_SHAPE_CUES: readonly RegExp[] = [
-  new RegExp(`(?<![A-Za-z])${EN_DM_PLATS}\\s*(?:(?:账|帐)?号(?:码)?|用户名)\\s*(?:是|为|叫)?\\s*${NO_ENUM_WRAP}$`, 'i'),
-  new RegExp(`(?<![A-Za-z])${EN_CONTENT_PLATS}\\s*(?:(?:账|帐)?号(?:码)?|用户名)\\s*(?:是|为|叫|${EXPLICIT_DELIM})\\s*${NO_ENUM_WRAP}$`, 'i'),
+  new RegExp(`(?<![A-Za-z])${EN_ALL_PLATS}\\s*(?:(?:账|帐)?号(?:码)?|用户名)\\s*(?:是|为|叫|${EXPLICIT_DELIM})\\s*${NO_ENUM_WRAP}$`, 'i'),
   new RegExp(`(?:游戏|共享|系统|本地)(?:账|帐)号(?:码)?\\s*(?:是|为|叫|${EXPLICIT_DELIM})\\s*${WRAP}$`, 'i'),
   new RegExp(`\\bmy\\s+[A-Za-z][A-Za-z0-9_-]{1,18}\\s+name\\s*(?:is\\b|[:：=])\\s*${WRAP}$`, 'i'),
   new RegExp(`(?:我(?:的)?|本人)\\s*(?:${CN_DM_PLATS}|${CN_CONTENT_PLATS}|${EN_ALL_PLATS}|[vVxX])\\s*${NO_ENUM_WRAP}$`, 'i'),
@@ -216,7 +215,7 @@ const GENERAL_SHAPE_CUES: readonly RegExp[] = [
 ]
 
 const STRONG_HANDLE_CUES: readonly RegExp[] = [
-  new RegExp(`(?<![A-Za-z])${EN_CONTENT_PLATS}\\s*(?:(?:账|帐)?号(?:码)?|用户名)[ \\t]+[“‘"'*]{0,2}$`, 'i'),
+  new RegExp(`(?<![A-Za-z])${EN_ALL_PLATS}\\s*(?:(?:账|帐)?号(?:码)?|用户名)[ \\t]*[“‘"'*]{0,2}$`, 'i'),
   new RegExp(`(?:加我|关注我|私信我|联系我|找我|滴滴我|dd我)\\s*${NO_ENUM_WRAP}$`, 'i'),
   new RegExp(`\\b${EN_CONTENT_PLATS}[ \\t]+[“‘"'*]{0,2}$`, 'i'),
   new RegExp(`\\bmy\\s+${EN_CONTENT_PLATS}\\s*(?:is\\b|[:：=])\\s*${WRAP}$`, 'i'),
@@ -248,7 +247,7 @@ const TRAILING_AFTER_RE = new RegExp(
 
 const PURE_ALPHA_EXPLICIT_CUES: readonly RegExp[] = [
   new RegExp(
-    `(?:(?:我(?:的)?|本人)\\s*(?:微信|[vV]信|${CN_DM_ALIAS})\\s*(?:(?:账|帐)?号(?:码)?|ID|名)?\\s*(?:是|为|叫|[:：=])\\s*${WRAP}|(?:加\\s*(?:我|个|一下)?|(?<![A-Za-z0-9])\\+)[ \\t]*(?:[vV微]|微信|[vV]信|${CN_DM_ALIAS})\\s*(?:(?:账|帐)?号(?:码)?|ID)?\\s*(?:吧|呀|哈|聊)?\\s*${NO_ENUM_WRAP}|(?:微信|[vV]信|${CN_DM_ALIAS}|${CN_CONTENT_PLATS})\\s*(?:(?:账|帐)?号(?:码)?|ID|名|同号)\\s*(?:是|为|叫)?\\s*${WRAP}|(?<![A-Za-z])${EN_DM_PLATS}\\s*(?:(?:账|帐)?号(?:码)?|用户名)\\s*(?:是|为|叫|[:：=])\\s*${WRAP})$`,
+    `(?:(?:我(?:的)?|本人)\\s*(?:微信|[vV]信|${CN_DM_ALIAS})\\s*(?:(?:账|帐)?号(?:码)?|ID|名)?\\s*(?:是|为|叫|[:：=])\\s*${WRAP}|(?:加\\s*(?:我|个|一下)?|(?<![A-Za-z0-9])\\+)[ \\t]*(?:[vV微]|微信|[vV]信|${CN_DM_ALIAS})\\s*(?:(?:账|帐)?号(?:码)?|ID)?\\s*(?:吧|呀|哈|聊)?\\s*${NO_ENUM_WRAP}|(?:微信|[vV]信|${CN_DM_ALIAS}|${CN_CONTENT_PLATS})\\s*(?:(?:账|帐)?号(?:码)?|ID|名|同号)\\s*(?:是|为|叫)?\\s*${WRAP})$`,
     'i',
   ),
   new RegExp(
@@ -262,6 +261,14 @@ const PURE_ALPHA_EXPLICIT_CUES: readonly RegExp[] = [
   ),
 ]
 
+const PURE_ALPHA_CLAUSE_CUES: readonly RegExp[] = [
+  new RegExp(
+    `(?<![A-Za-z])${EN_DM_PLATS}\\s*(?:(?:账|帐)?号(?:码)?|用户名)\\s*(?:是|为|叫|[:：=])\\s*${WRAP}$`,
+    'i',
+  ),
+  new RegExp(`\\b(?:username|handle)\\s*[:：=]\\s*${WRAP}$`, 'i'),
+]
+
 const PURE_DIGIT_EXPLICIT_CUE_RE = new RegExp(
   `(?:${CN_DM_PLATS}|${CN_CONTENT_PLATS}|\\b${EN_ALL_PLATS})\\s*(?:(?:账|帐)?号(?:码)?|ID)\\s*(?:是|为|叫)?\\s*${WRAP}$`,
   'i',
@@ -269,13 +276,7 @@ const PURE_DIGIT_EXPLICIT_CUE_RE = new RegExp(
 
 const PURE_ALPHA_OR_HYPHEN_RE = /^[A-Za-z](?:[A-Za-z-]{4,30}[A-Za-z])$/
 
-function isMarkdownItalicToken(tok: string, after: string): boolean {
-  if (/^_[A-Za-z]+_$/.test(tok)) return true
-  if (/^_[A-Za-z]+$/.test(tok)) {
-    return /^(?:[ \t]+[A-Za-z0-9'-]+){1,4}_(?=$|[\s.,!?;:)\]"'”’])/.test(after)
-  }
-  return false
-}
+const EMPHASIS_RE = /(?<![A-Za-z0-9_])(_{1,3})(?=[^\s_])([^_\n]*?[^\s_])\1(?![A-Za-z0-9_])/g
 
 function hasCueBefore(before: string, patterns: readonly RegExp[]): boolean {
   return patterns.some((re) => re.test(before))
@@ -288,7 +289,8 @@ export function scanPii(text: string): { clean: boolean; findings: PiiFinding[] 
     .replace(/\r\n?|\u2028|\u2029/g, '\n')
   const findings: PiiFinding[] = []
 
-  for (const line of normalized.split('\n')) {
+  for (const rawLine of normalized.split('\n')) {
+    const line = rawLine.replace(EMPHASIS_RE, '$2')
     if (!line) continue
 
     for (const { category, pattern } of DIRECT_PATTERNS) {
@@ -329,7 +331,6 @@ export function scanPii(text: string): { clean: boolean; findings: PiiFinding[] 
       const end = start + tok.length
       const before = line.slice(Math.max(0, start - 48), start)
       const after = line.slice(end)
-      if (isMarkdownItalicToken(tok, after)) continue
 
       if (isHandleShape(tok, false) && hasCueBefore(before, EXPLICIT_IDENTITY_CUES)) {
         findings.push({ category: 'social_handle', excerpt: tok.slice(0, 32) })
@@ -344,7 +345,10 @@ export function scanPii(text: string): { clean: boolean; findings: PiiFinding[] 
           findings.push({ category: 'social_handle', excerpt: tok.slice(0, 32) })
         }
       } else if (PURE_ALPHA_OR_HYPHEN_RE.test(tok) && !PLATFORM_WORD_RE.test(tok)) {
-        if (hasCueBefore(before, PURE_ALPHA_EXPLICIT_CUES)) {
+        if (
+          hasCueBefore(before, PURE_ALPHA_EXPLICIT_CUES) ||
+          (hasCueBefore(before, PURE_ALPHA_CLAUSE_CUES) && isBareContentHandleClause(after))
+        ) {
           findings.push({ category: 'social_handle', excerpt: tok.slice(0, 32) })
         }
       } else if (/^[1-9]\d{5,11}$/.test(tok)) {
