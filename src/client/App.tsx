@@ -1,6 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { COPY, detectInitialLocale, type Locale } from './i18n'
 import LiveStage from './LiveStage'
+import ResonanceCanvas from './ResonanceCanvas'
+import VisualStory from './VisualStory'
 import { registerKindredWebMcp } from './webmcp'
 
 function fallbackCopy(text: string): boolean {
@@ -24,6 +26,7 @@ function fallbackCopy(text: string): boolean {
 export default function App() {
   const [locale, setLocale] = useState<Locale>(detectInitialLocale)
   const [copied, setCopied] = useState(false)
+  const [resonanceBoost, setResonanceBoost] = useState(0)
 
   useEffect(() => {
     const reg = registerKindredWebMcp()
@@ -40,7 +43,7 @@ export default function App() {
   const origin = typeof window !== 'undefined' ? window.location.origin : ''
   const promptText = copy.promptTemplate(`${origin}/skill.md`)
 
-  const handleCopy = async () => {
+  const handleCopy = useCallback(async () => {
     let ok = false
     try {
       await navigator.clipboard.writeText(promptText)
@@ -50,89 +53,117 @@ export default function App() {
     }
     if (ok) {
       setCopied(true)
-      window.setTimeout(() => setCopied(false), 2400)
+      setResonanceBoost(1)
+      window.setTimeout(() => {
+        setCopied(false)
+        setResonanceBoost(0.2)
+      }, 2400)
     }
-  }
+  }, [promptText])
+
+  const handleSceneChange = useCallback((idx: number) => {
+    setResonanceBoost(idx === 1 ? 0.9 : idx === 2 ? 0.55 : 0.2)
+  }, [])
 
   return (
-    <div className="page">
-      <header className="topbar">
-        <a href="/" className="brand" aria-label="Kindred">
-          <span className="brand-mark" aria-hidden="true">
-            <span className="brand-dot brand-dot--a" />
-            <span className="brand-dot brand-dot--b" />
-          </span>
-          <span className="brand-name">Kindred</span>
-        </a>
-
-        <div className="topbar-right">
-          <nav className="topbar-links" aria-label="Links">
-            <a href="/skill.md" className="top-link">
-              {copy.protocolLink}
+    <div className="app">
+      <div className="hero-backdrop">
+        <ResonanceCanvas resonanceBoost={resonanceBoost} />
+        <div className="container">
+          <header className="topbar">
+            <a href="/" className="brand" aria-label="Kindred">
+              <span className="brand-mark" aria-hidden="true">
+                <span className="brand-dot brand-dot--a" />
+                <span className="brand-dot brand-dot--b" />
+              </span>
+              <span className="brand-name">Kindred</span>
             </a>
-            <a
-              href="https://github.com/amio-love/kindred"
-              target="_blank"
-              rel="noreferrer"
-              className="top-link"
-            >
+
+            <div className="topbar-right">
+              <nav className="topbar-links" aria-label="Links">
+                <a href="/skill.md" className="top-link">
+                  {copy.protocolLink}
+                </a>
+                <a
+                  href="https://github.com/amio-love/kindred"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="top-link"
+                >
+                  GitHub
+                </a>
+              </nav>
+
+              <div className="lang-switch" role="group" aria-label="Language">
+                <button
+                  type="button"
+                  className={`lang-btn ${locale === 'zh' ? 'lang-btn--active' : ''}`}
+                  aria-pressed={locale === 'zh'}
+                  onClick={() => setLocale('zh')}
+                >
+                  中
+                </button>
+                <button
+                  type="button"
+                  className={`lang-btn ${locale === 'en' ? 'lang-btn--active' : ''}`}
+                  aria-pressed={locale === 'en'}
+                  onClick={() => setLocale('en')}
+                >
+                  EN
+                </button>
+              </div>
+            </div>
+          </header>
+
+          <main className="hero-grid">
+            <section className="hero-copy">
+              <span className="eyebrow">{copy.eyebrow}</span>
+              <h1 className={locale === 'en' ? 'h1-en' : 'h1-zh'}>{copy.headline}</h1>
+              <p className="hero-sub">{copy.subtitle}</p>
+
+              <div className="command-bar">
+                <code className="command-code">{promptText}</code>
+                <button
+                  type="button"
+                  className={`cta-btn ${copied ? 'cta-btn--copied' : ''}`}
+                  onClick={handleCopy}
+                >
+                  {copied ? copy.copiedButton : copy.copyButton}
+                </button>
+              </div>
+
+              <ul className="trust-row">
+                {copy.trustItems.map((item) => (
+                  <li key={item}>{item}</li>
+                ))}
+              </ul>
+
+              <div className="hosts-row">
+                <span className="hosts-label">{copy.worksWith}</span>
+                <span className="hosts-list">Meta Muse · ChatGPT · Claude · Grok · OpenClaw</span>
+              </div>
+            </section>
+
+            <section className="hero-stage" aria-label={copy.stageHeader}>
+              <LiveStage copy={copy} onSceneChange={handleSceneChange} />
+            </section>
+          </main>
+        </div>
+      </div>
+
+      <div className="container">
+        <VisualStory copy={copy} copied={copied} onCopy={handleCopy} />
+
+        <footer className="site-footer">
+          <span className="footer-brand">Kindred</span>
+          <div className="footer-links">
+            <a href="/skill.md">{copy.protocolLink}</a>
+            <a href="https://github.com/amio-love/kindred" target="_blank" rel="noreferrer">
               GitHub
             </a>
-          </nav>
-
-          <div className="lang-switch" role="group" aria-label="Language">
-            <button
-              type="button"
-              className={`lang-btn ${locale === 'zh' ? 'lang-btn--active' : ''}`}
-              aria-pressed={locale === 'zh'}
-              onClick={() => setLocale('zh')}
-            >
-              中
-            </button>
-            <button
-              type="button"
-              className={`lang-btn ${locale === 'en' ? 'lang-btn--active' : ''}`}
-              aria-pressed={locale === 'en'}
-              onClick={() => setLocale('en')}
-            >
-              EN
-            </button>
           </div>
-        </div>
-      </header>
-
-      <main className="hero-grid">
-        <section className="hero-copy">
-          <h1>{copy.headline}</h1>
-          <p className="hero-sub">{copy.subtitle}</p>
-
-          <div className="prompt-dock">
-            <code className="prompt-text">{promptText}</code>
-            <button
-              type="button"
-              className={`cta-btn ${copied ? 'cta-btn--copied' : ''}`}
-              onClick={handleCopy}
-            >
-              {copied ? copy.copiedButton : copy.copyButton}
-            </button>
-          </div>
-
-          <ul className="trust-row">
-            {copy.trustItems.map((item) => (
-              <li key={item}>{item}</li>
-            ))}
-          </ul>
-
-          <div className="hosts-row">
-            <span className="hosts-label">{copy.worksWith}</span>
-            <span className="hosts-list">Meta Muse · ChatGPT · Claude · Grok · OpenClaw</span>
-          </div>
-        </section>
-
-        <section className="hero-stage" aria-label={copy.stageHeader}>
-          <LiveStage copy={copy} />
-        </section>
-      </main>
+        </footer>
+      </div>
     </div>
   )
 }
