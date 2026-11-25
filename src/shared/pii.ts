@@ -63,7 +63,7 @@ const PRODUCT_MODEL_RE =
 
 function isHandleShape(token: string, allowProductExempt: boolean): boolean {
   if (token.length < 3 || token.length > 32) return false
-  if (!/^[A-Za-z]/.test(token)) return false
+  if (!/^_*[A-Za-z]/.test(token)) return false
   if (TECH_NON_URL_NAMES.has(token.toLowerCase())) return false
   const dotParts = token.split('.')
   if (dotParts.length === 2) {
@@ -188,7 +188,7 @@ const EXPLICIT_IDENTITY_CUES: readonly RegExp[] = [
   ),
   new RegExp(`\\b(?:username|handle)\\s*[:：=]\\s*${WRAP}$`, 'i'),
   new RegExp(
-    `\\b(?:my\\s+)?(?:${EN_ALL_PLATS}|[vVxX])\\s+(?:id|handle|account|username|name)\\s*(?:is\\b|[:：=]|\\s)\\s*${WRAP}$`,
+    `\\b(?:my\\s+)?(?:(?:${EN_ALL_PLATS}|[vVxX])\\s+(?:id|handle|account|username|name)|${EN_ALL_PLATS}(?:id|handle|username))\\s*(?:is\\b|[:：=]|\\s)\\s*${WRAP}$`,
     'i',
   ),
   new RegExp(
@@ -198,6 +198,7 @@ const EXPLICIT_IDENTITY_CUES: readonly RegExp[] = [
 ]
 
 const GENERAL_SHAPE_CUES: readonly RegExp[] = [
+  new RegExp(`(?<![A-Za-z])${EN_ALL_PLATS}\\s*(?:(?:账|帐)?号(?:码)?|用户名)\\s*(?:是|为|叫)?\\s*${NO_ENUM_WRAP}$`, 'i'),
   new RegExp(`(?:游戏|共享|系统|本地)(?:账|帐)号(?:码)?\\s*(?:是|为|叫|${EXPLICIT_DELIM})\\s*${WRAP}$`, 'i'),
   new RegExp(`\\bmy\\s+[A-Za-z][A-Za-z0-9_-]{1,18}\\s+name\\s*(?:is\\b|[:：=])\\s*${WRAP}$`, 'i'),
   new RegExp(`(?:我(?:的)?|本人)\\s*(?:${CN_DM_PLATS}|${CN_CONTENT_PLATS}|${EN_ALL_PLATS}|[vVxX])\\s*${NO_ENUM_WRAP}$`, 'i'),
@@ -245,11 +246,11 @@ const TRAILING_AFTER_RE = new RegExp(
 
 const PURE_ALPHA_EXPLICIT_CUES: readonly RegExp[] = [
   new RegExp(
-    `(?:(?:我(?:的)?|本人)\\s*(?:微信|[vV]信|${CN_DM_ALIAS})\\s*(?:(?:账|帐)?号(?:码)?|ID|名)?\\s*(?:是|为|叫|[:：=])\\s*${WRAP}|(?:加\\s*(?:我|个|一下)?|(?<![A-Za-z0-9])\\+)[ \\t]*(?:[vV微]|微信|[vV]信|${CN_DM_ALIAS})\\s*(?:(?:账|帐)?号(?:码)?|ID)?\\s*(?:吧|呀|哈|聊)?\\s*${NO_ENUM_WRAP}|(?:微信|[vV]信|${CN_DM_ALIAS}|${CN_CONTENT_PLATS})\\s*(?:(?:账|帐)?号(?:码)?|ID|名|同号)\\s*(?:是|为|叫)?\\s*${WRAP})$`,
+    `(?:(?:我(?:的)?|本人)\\s*(?:微信|[vV]信|${CN_DM_ALIAS})\\s*(?:(?:账|帐)?号(?:码)?|ID|名)?\\s*(?:是|为|叫|[:：=])\\s*${WRAP}|(?:加\\s*(?:我|个|一下)?|(?<![A-Za-z0-9])\\+)[ \\t]*(?:[vV微]|微信|[vV]信|${CN_DM_ALIAS})\\s*(?:(?:账|帐)?号(?:码)?|ID)?\\s*(?:吧|呀|哈|聊)?\\s*${NO_ENUM_WRAP}|(?:微信|[vV]信|${CN_DM_ALIAS}|${CN_CONTENT_PLATS}|(?<![A-Za-z])${EN_DM_PLATS})\\s*(?:(?:账|帐)?号(?:码)?|ID|名|同号)\\s*(?:是|为|叫)?\\s*${WRAP})$`,
     'i',
   ),
   new RegExp(
-    `\\b(?:my\\s+)?(?:${EN_ALL_PLATS}|[vVxX])\\s+(?:id|handle|username|name)\\s*(?:is\\b|[:：=])\\s*${WRAP}$`,
+    `\\b(?:my\\s+)?(?:(?:${EN_ALL_PLATS}|[vVxX])\\s+(?:id|handle|username|name)|${EN_ALL_PLATS}(?:id|handle|username))\\s*(?:is\\b|[:：=])\\s*${WRAP}$`,
     'i',
   ),
   new RegExp(`\\bmy\\s+(?:wechat|weixin|wx|vx)\\s*[:：=]\\s*${WRAP}$`, 'i'),
