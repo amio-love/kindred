@@ -476,10 +476,14 @@ a:focus-visible {
 }
 
 .host-dot-btn:focus-visible,
-.cinema-scrubber:focus-visible,
 .subtext-retry-btn:focus-visible {
   outline: 2px solid var(--coral);
   outline-offset: 2px;
+}
+
+.cinema-scrubber:focus-visible {
+  outline: 2px solid var(--coral);
+  outline-offset: -2px;
 }
 
 .host-dot-btn--active {

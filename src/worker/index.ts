@@ -5,7 +5,7 @@ import type { Env } from './env'
 import { createMcpRoutes } from './mcp'
 import { createProtocolRoutes } from './routes/protocol'
 
-const app = new Hono<{ Bindings: Env }>()
+const app = new Hono<{ Bindings: Env }>({ strict: false })
 
 app.use(
   '*',

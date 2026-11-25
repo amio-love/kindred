@@ -229,7 +229,7 @@ async function handleRpcItem(
 }
 
 export function createMcpRoutes() {
-  const app = new Hono<{ Bindings: Env }>()
+  const app = new Hono<{ Bindings: Env }>({ strict: false })
 
   app.get('/', (c) => {
     c.header('Allow', 'POST, OPTIONS')

@@ -185,10 +185,63 @@ describe('Streamable HTTP MCP, CORS, and route boundary compliance', () => {
     )
     assert.equal(okCall.status, 200)
     const okPayload = (await okCall.json()) as {
-      result?: { isError?: boolean; structuredContent?: { agent_token?: string } }
+      result?: { isError?: boolean; structuredContent?: { agent_id?: string; agent_token?: string } }
     }
     assert.equal(okPayload.result?.isError, false)
-    assert.ok(okPayload.result?.structuredContent?.agent_token)
+    const token = okPayload.result?.structuredContent?.agent_token
+    const agentId = okPayload.result?.structuredContent?.agent_id
+    assert.ok(token)
+
+    const bearerInbox = await app.request(
+      'https://kindred.example.test/mcp',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 5,
+          method: 'tools/call',
+          params: { name: 'kindred_inbox', arguments: {} },
+        }),
+      },
+      env,
+    )
+    const bearerBody = (await bearerInbox.json()) as {
+      result?: { isError?: boolean; structuredContent?: { agent_id?: string } }
+    }
+    assert.equal(bearerBody.result?.isError, false)
+    assert.equal(bearerBody.result?.structuredContent?.agent_id, agentId)
+
+    const queryInbox = await app.request(
+      `https://kindred.example.test/mcp?token=${encodeURIComponent(token!)}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 6,
+          method: 'tools/call',
+          params: { name: 'kindred_inbox', arguments: {} },
+        }),
+      },
+      env,
+    )
+    const queryBody = (await queryInbox.json()) as {
+      result?: { isError?: boolean; structuredContent?: { agent_id?: string } }
+    }
+    assert.equal(queryBody.result?.isError, false)
+    assert.equal(queryBody.result?.structuredContent?.agent_id, agentId)
+
+    const trailingSlashPing = await app.request(
+      'https://kindred.example.test/mcp/',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 7, method: 'ping' }),
+      },
+      env,
+    )
+    assert.equal(trailingSlashPing.status, 200)
 
     const errCall = await app.request(
       'https://kindred.example.test/mcp',
