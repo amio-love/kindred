@@ -70,8 +70,8 @@ function isHandleShape(token: string, allowProductExempt: boolean): boolean {
     if (HONORIFICS.has(dotParts[0]!.toLowerCase())) return false
     if (CODE_OR_FILE_EXTS.has(dotParts[1]!.toLowerCase())) return false
   }
-  if (RANKING_RE.test(token)) return false
   if (allowProductExempt) {
+    if (RANKING_RE.test(token)) return false
     if (SEMVER_RE.test(token)) return false
     if (PRODUCT_MODEL_RE.test(token)) return false
   }
@@ -80,8 +80,8 @@ function isHandleShape(token: string, allowProductExempt: boolean): boolean {
 }
 
 const WRAP = '[^A-Za-z0-9\\u4e00-\\u9fff.。!！?？;；\\n]{0,12}'
-const TIGHT = '[^A-Za-z0-9\\u4e00-\\u9fff.。!！?？;；\\n、/|+&·-]{0,12}'
-const EXPLICIT_DELIM = '[^\\sA-Za-z0-9\\u4e00-\\u9fff.。!！?？;；\\n、/|+&·-]'
+const NO_ENUM_WRAP = '[^A-Za-z0-9\\u4e00-\\u9fff.。!！?？;；\\n、]{0,12}'
+const EXPLICIT_DELIM = '[^\\sA-Za-z0-9\\u4e00-\\u9fff.。!！?？;；\\n、]'
 
 const DIRECT_PATTERNS: ReadonlyArray<{ category: PiiFinding['category']; pattern: RegExp }> = [
   { category: 'email', pattern: /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi },
@@ -167,10 +167,11 @@ const EN_DM_PLATS =
 const EN_CONTENT_PLATS =
   '(?:steam|twitch|psn|xbox|battlenet|bnet|github|reddit|substack|medium|youtube|spotify|goodreads|letterboxd|strava)'
 const EN_ALL_PLATS = `(?:${EN_DM_PLATS}|${EN_CONTENT_PLATS})`
+const PLATFORM_WORD_RE = new RegExp(`^${EN_ALL_PLATS}$`, 'i')
 
 const EXPLICIT_IDENTITY_CUES: readonly RegExp[] = [
   new RegExp(
-    `(?:我(?:的)?|本人)\\s*(?:(?:${CN_DM_PLATS}|${CN_CONTENT_PLATS}|${EN_ALL_PLATS}|[vVxX])\\s*(?:(?:账|帐)?号(?:码)?|用户名|ID|名|同号|是|为|叫|[:：=])|(?:(?:账|帐)?号(?:码)?|用户名|ID|名))\\s*(?:是|为|叫)?\\s*${WRAP}$`,
+    `(?:我(?:的)?|本人)\\s*(?:(?:${CN_DM_PLATS}|${CN_CONTENT_PLATS}|${EN_ALL_PLATS}|[vVxX])\\s*(?:(?:账|帐)?号(?:码)?|用户名|ID|名|同号|是|为|叫|[:：=])|(?:(?<!游戏|本地|系统|共享)(?:账|帐)?号(?:码)?|用户名|ID|名))\\s*(?:是|为|叫)?\\s*${WRAP}$`,
     'i',
   ),
   new RegExp(
@@ -182,7 +183,7 @@ const EXPLICIT_IDENTITY_CUES: readonly RegExp[] = [
     'i',
   ),
   new RegExp(
-    `(?:加\\s*(?:我\\s*|个\\s*|一下\\s*)?(?:[vV微]|${CN_DM_PLATS}|${CN_CONTENT_PLATS}|${EN_ALL_PLATS})|(?<![A-Za-z0-9])\\+\\s*(?:[vV微]|${CN_DM_PLATS}|${CN_DM_ALIAS}))(?!\\s*[、/|+&·-])\\s*(?:(?:账|帐)?号(?:码)?|ID|名)?\\s*(?:吧|呀|哈|聊)?\\s*${TIGHT}$`,
+    `(?:加\\s*(?:我\\s*|个\\s*|一下\\s*)?(?:[vV微]|${CN_DM_PLATS}|${CN_CONTENT_PLATS}|${EN_ALL_PLATS})|(?<![A-Za-z0-9])\\+\\s*(?:[vV微]|${CN_DM_PLATS}|${CN_DM_ALIAS}))\\s*(?:(?:账|帐)?号(?:码)?|ID|名)?\\s*(?:吧|呀|哈|聊)?\\s*${NO_ENUM_WRAP}$`,
     'i',
   ),
   new RegExp(`\\b(?:username|handle)\\s*[:：=]\\s*${WRAP}$`, 'i'),
@@ -197,12 +198,14 @@ const EXPLICIT_IDENTITY_CUES: readonly RegExp[] = [
 ]
 
 const GENERAL_SHAPE_CUES: readonly RegExp[] = [
-  new RegExp(`(?:我(?:的)?|本人)\\s*(?:${CN_DM_PLATS}|${CN_CONTENT_PLATS}|${EN_ALL_PLATS})\\s*${TIGHT}$`, 'i'),
-  new RegExp(`(?:${CN_DM_PLATS}|${CN_DM_ALIAS}|${CN_CONTENT_PLATS})\\s*搜(?:索)?\\s*${TIGHT}$`, 'i'),
-  new RegExp(`(?:加我|关注我|私信我|联系我|找我|滴滴我|dd我)\\s*${EXPLICIT_DELIM}${WRAP}$`, 'i'),
-  new RegExp(`(?:${CN_DM_PLATS}|${CN_DM_ALIAS})\\s*(?:是|为|叫)?\\s*${TIGHT}$`, 'i'),
+  new RegExp(`(?:游戏|共享|系统|本地)(?:账|帐)号(?:码)?\\s*(?:是|为|叫|${EXPLICIT_DELIM})\\s*${WRAP}$`, 'i'),
+  new RegExp(`\\bmy\\s+[A-Za-z][A-Za-z0-9_-]{1,18}\\s+name\\s*(?:is\\b|[:：=])\\s*${WRAP}$`, 'i'),
+  new RegExp(`(?:我(?:的)?|本人)\\s*(?:${CN_DM_PLATS}|${CN_CONTENT_PLATS}|${EN_ALL_PLATS}|[vVxX])\\s*${NO_ENUM_WRAP}$`, 'i'),
+  new RegExp(`(?:${CN_DM_PLATS}|${CN_DM_ALIAS}|${CN_CONTENT_PLATS})\\s*搜(?:索)?\\s*${NO_ENUM_WRAP}$`, 'i'),
+  new RegExp(`(?:加我|关注我|私信我|联系我|找我|滴滴我|dd我)\\s*${EXPLICIT_DELIM}${NO_ENUM_WRAP}$`, 'i'),
+  new RegExp(`(?:${CN_DM_PLATS}|${CN_DM_ALIAS})\\s*(?:是|为|叫)?\\s*${NO_ENUM_WRAP}$`, 'i'),
   new RegExp(`(?<![A-Za-z])[vVxX]\\s*[:：=]\\s*${WRAP}$`),
-  new RegExp(`\\b${EN_DM_PLATS}\\s*(?:is\\b|[:：=]|\\s)\\s*${TIGHT}$`, 'i'),
+  new RegExp(`\\b${EN_DM_PLATS}\\s*(?:is\\b|[:：=]|\\s)\\s*${NO_ENUM_WRAP}$`, 'i'),
   new RegExp(`\\b${EN_CONTENT_PLATS}\\s*[:：=]\\s*${WRAP}$`, 'i'),
   new RegExp(
     `\\b(?:(?:find|add|dm|message|reach|contact|follow|text|ping)\\s+me(?:\\s+(?:(?:on|at)\\s+[A-Za-z0-9_.-]+(?:\\s+(?:as|at)\\b|\\s*[:：=]|\\s+)|(?:as|at)\\b))?|hmu(?:\\s+(?:on|at)\\s+[A-Za-z0-9_.-]+)?)\\s*${WRAP}$`,
@@ -211,10 +214,10 @@ const GENERAL_SHAPE_CUES: readonly RegExp[] = [
 ]
 
 const STRONG_HANDLE_CUES: readonly RegExp[] = [
-  new RegExp(`(?:加我|关注我|私信我|联系我|找我|滴滴我|dd我)\\s*${TIGHT}$`, 'i'),
+  new RegExp(`(?:加我|关注我|私信我|联系我|找我|滴滴我|dd我)\\s*${NO_ENUM_WRAP}$`, 'i'),
   new RegExp(`\\b${EN_CONTENT_PLATS}[ \\t]+[“‘"'*]{0,2}$`, 'i'),
   new RegExp(`\\bmy\\s+${EN_CONTENT_PLATS}\\s*(?:is\\b|[:：=])\\s*${WRAP}$`, 'i'),
-  new RegExp(`\\b(?:find|add|dm|message|reach|contact|follow|text)\\s+me\\s+on\\s+${TIGHT}$`, 'i'),
+  new RegExp(`\\b(?:find|add|dm|message|reach|contact|follow|text)\\s+me\\s+on\\s+${NO_ENUM_WRAP}$`, 'i'),
 ]
 
 const BARE_CN_CONTENT_CUE_RE = new RegExp(`(?:${CN_CONTENT_PLATS})\\s*(?:是|为|叫|[:：=])\\s*${WRAP}$`, 'i')
@@ -242,7 +245,7 @@ const TRAILING_AFTER_RE = new RegExp(
 
 const PURE_ALPHA_EXPLICIT_CUES: readonly RegExp[] = [
   new RegExp(
-    `(?:(?:我(?:的)?|本人)\\s*(?:微信|[vV]信|${CN_DM_ALIAS})\\s*(?:(?:账|帐)?号(?:码)?|ID|名)?\\s*(?:是|为|叫|[:：=])|(?:加\\s*(?:我|个|一下)?|(?<![A-Za-z0-9])\\+)[ \\t]*(?:[vV微]|微信|[vV]信|${CN_DM_ALIAS})(?!\\s*[、/|+&·,-])\\s*(?:(?:账|帐)?号(?:码)?|ID)?\\s*(?:吧|呀|哈|聊)?|(?:微信|[vV]信|${CN_DM_ALIAS}|${CN_CONTENT_PLATS})\\s*(?:(?:账|帐)?号(?:码)?|ID|名|同号)\\s*(?:是|为|叫)?)\\s*${TIGHT}$`,
+    `(?:(?:我(?:的)?|本人)\\s*(?:微信|[vV]信|${CN_DM_ALIAS})\\s*(?:(?:账|帐)?号(?:码)?|ID|名)?\\s*(?:是|为|叫|[:：=])\\s*${WRAP}|(?:加\\s*(?:我|个|一下)?|(?<![A-Za-z0-9])\\+)[ \\t]*(?:[vV微]|微信|[vV]信|${CN_DM_ALIAS})\\s*(?:(?:账|帐)?号(?:码)?|ID)?\\s*(?:吧|呀|哈|聊)?\\s*${NO_ENUM_WRAP}|(?:微信|[vV]信|${CN_DM_ALIAS}|${CN_CONTENT_PLATS})\\s*(?:(?:账|帐)?号(?:码)?|ID|名|同号)\\s*(?:是|为|叫)?\\s*${WRAP})$`,
     'i',
   ),
   new RegExp(
@@ -328,7 +331,7 @@ export function scanPii(text: string): { clean: boolean; findings: PiiFinding[] 
         ) {
           findings.push({ category: 'social_handle', excerpt: tok.slice(0, 32) })
         }
-      } else if (PURE_ALPHA_OR_HYPHEN_RE.test(tok)) {
+      } else if (PURE_ALPHA_OR_HYPHEN_RE.test(tok) && !PLATFORM_WORD_RE.test(tok)) {
         if (hasCueBefore(before, PURE_ALPHA_EXPLICIT_CUES)) {
           findings.push({ category: 'social_handle', excerpt: tok.slice(0, 32) })
         }
