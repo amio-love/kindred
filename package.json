@@ -9,8 +9,8 @@
     "dev": "bun run build:web && wrangler dev --port 8787 --persist-to .wrangler/state",
     "build:web": "vite build",
     "build": "bun run build:web && bun run typecheck",
-    "db:migrate:local": "wrangler d1 migrations apply kindred-db --local --persist-to .wrangler/state --yes",
-    "db:migrate:remote": "wrangler d1 migrations apply kindred-db --remote",
+    "db:migrate:local": "wrangler d1 migrations apply kindred-db --local --persist-to .wrangler/state -y",
+    "db:migrate:remote": "wrangler d1 migrations apply kindred-db --remote -y",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "deploy": "bun run build:web && wrangler deploy"

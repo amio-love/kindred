@@ -423,7 +423,8 @@ textarea:focus-visible {
   font-weight: 700;
 }
 
-.option-btn--selected .option-key {
+.option-btn--selected .option-key,
+.option-key--active {
   background: var(--ink);
   color: var(--paper-elevated);
 }

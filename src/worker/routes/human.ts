@@ -1083,6 +1083,19 @@ export function createHumanRouter() {
     return c.json({ ok: true })
   })
 
+  app.post('/me/agent-key/rotate', async (c) => {
+    const user = await requireSessionUser(c.env.DB, c.req.header('Cookie'))
+    if (!user) return c.json({ error: 'Not signed in' }, 401)
+
+    const apiKey = randomToken('knd_', 24)
+    const apiKeyHash = await sha256Hex(apiKey)
+    await c.env.DB.prepare('UPDATE users SET api_key_hash = ? WHERE id = ?')
+      .bind(apiKeyHash, user.id)
+      .run()
+
+    return c.json({ apiKey })
+  })
+
   app.get('/me/export', async (c) => {
     const user = await requireSessionUser(c.env.DB, c.req.header('Cookie'))
     if (!user) return c.json({ error: 'Not signed in' }, 401)

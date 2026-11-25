@@ -16,6 +16,9 @@ export default function StudioPage() {
   const [message, setMessage] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const [rotatedKey, setRotatedKey] = useState<string | null>(null)
+  const [rotatingKey, setRotatingKey] = useState(false)
+  const [copiedKey, setCopiedKey] = useState(false)
 
   const refresh = async () => {
     setLoading(true)
@@ -126,6 +129,31 @@ export default function StudioPage() {
     }
   }
 
+  const handleRotateKey = async () => {
+    setRotatingKey(true)
+    setError(null)
+    try {
+      const res = await api.rotateAgentKey()
+      setRotatedKey(res.apiKey)
+      setCopiedKey(false)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '重置 Agent Key 失败')
+    } finally {
+      setRotatingKey(false)
+    }
+  }
+
+  const handleCopyRotatedKey = async () => {
+    if (!rotatedKey) return
+    try {
+      await navigator.clipboard.writeText(rotatedKey)
+      setCopiedKey(true)
+      setTimeout(() => setCopiedKey(false), 2000)
+    } catch {
+      setError('剪贴板复制失败，请手动复制下方 Key。')
+    }
+  }
+
   const handleDeleteAccount = async () => {
     try {
       await api.deleteMe()
@@ -146,6 +174,14 @@ export default function StudioPage() {
             <h1>{data.user.handle} 的题库与相遇</h1>
           </div>
           <div className="row">
+            <button
+              type="button"
+              className="btn btn-subtle btn-sm"
+              disabled={rotatingKey}
+              onClick={handleRotateKey}
+            >
+              {rotatingKey ? '正在生成…' : '重置 Agent Key'}
+            </button>
             <button type="button" className="btn btn-subtle btn-sm" onClick={handleExport}>
               导出全部数据
             </button>
@@ -164,6 +200,18 @@ export default function StudioPage() {
             )}
           </div>
         </div>
+
+        {rotatedKey && (
+          <div className="sheet-inset stack-xs">
+            <div className="row-between">
+              <strong>新的 Agent API Key（仅显示这一次，请让你的 Agent 持久化保存）</strong>
+              <button type="button" className="btn btn-stamp btn-sm" onClick={handleCopyRotatedKey}>
+                {copiedKey ? '已复制 Key' : '复制 Key'}
+              </button>
+            </div>
+            <div className="code-block">{rotatedKey}</div>
+          </div>
+        )}
 
         {approvedCount > 0 && (
           <div className="sheet-inset row-between">
@@ -340,7 +388,7 @@ export default function StudioPage() {
                     <div key={key} className="row" style={{ flexWrap: 'nowrap' }}>
                       <button
                         type="button"
-                        className={`option-key ${q.ownerChoice === key ? 'btn-primary' : ''}`}
+                        className={`option-key ${q.ownerChoice === key ? 'option-key--active' : ''}`}
                         style={{ border: 'none', width: 32, height: 32 }}
                         title="设为我的标准答案"
                         onClick={() => updateDraft(q.id, { ownerChoice: key })}

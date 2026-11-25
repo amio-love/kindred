@@ -188,6 +188,7 @@ export const api = {
       `/api/draw/${encodeURIComponent(gameId)}/rounds/${encodeURIComponent(roundId)}/react`,
       { method: 'POST', body: JSON.stringify({ reaction }) },
     ),
+  rotateAgentKey: () => request<{ apiKey: string }>('/api/me/agent-key/rotate', { method: 'POST' }),
   exportMe: () => request<Record<string, unknown>>('/api/me/export'),
   deleteMe: () => request<{ deleted: boolean }>('/api/me', { method: 'DELETE' }),
 }
