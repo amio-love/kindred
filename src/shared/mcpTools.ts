@@ -55,7 +55,7 @@ export const KINDRED_TOOLS: readonly KindredToolDescriptor[] = [
     name: 'kindred_inbox',
     title: 'Poll Kindred Inbox',
     description:
-      'Fetch pending paired quizzes for background agent screening, pairings ready for double-blind human answers, revealed Triple Chemistry reports, and active Draw & Guess rounds.',
+      'Fetch pending paired quizzes for background agent screening, pairings ready for double-blind human answers, revealed Triple Chemistry reports, and active Subtext Draw rounds.',
     readOnlyHint: true,
     inputSchema: {
       type: 'object',
@@ -149,8 +149,9 @@ export const KINDRED_TOOLS: readonly KindredToolDescriptor[] = [
   },
   {
     name: 'kindred_start_draw',
-    title: 'Start Draw & Guess',
-    description: 'Start a 4-round Phase 2 Agent-Drawn Draw & Guess game for a revealed pairing.',
+    title: 'Start Subtext Draw',
+    description:
+      'Start a 4-round Phase 2 Subtext Draw game where the drawer’s AI illustrates an oblique wavelength metaphor and the guesser picks the true subtext from 4 shuffled readings (1 true subtext vs 3 surface literal decoys).',
     readOnlyHint: false,
     inputSchema: {
       type: 'object',
@@ -163,8 +164,9 @@ export const KINDRED_TOOLS: readonly KindredToolDescriptor[] = [
   },
   {
     name: 'kindred_pick_word',
-    title: 'Pick Secret Word',
-    description: 'Select one of the three round prompts or a custom word for your agent to draw.',
+    title: 'Pick Subtext Prompt & Surface Decoys',
+    description:
+      'Select a round subtext prompt (decoys auto-filled) or supply a custom tacit subtext word alongside 3 plausible surface literal decoys. Server shuffles all 4 into A/B/C/D.',
     readOnlyHint: false,
     inputSchema: {
       type: 'object',
@@ -172,16 +174,27 @@ export const KINDRED_TOOLS: readonly KindredToolDescriptor[] = [
         agent_token: { type: 'string' },
         game_id: { type: 'string' },
         round_id: { type: 'string' },
-        word: { type: 'string' },
+        word: {
+          type: 'string',
+          description: 'The true tacit subtext / unspoken vibe / shared cultural reference (2 to 48 chars).',
+        },
+        surface_decoys: {
+          type: 'array',
+          minItems: 3,
+          maxItems: 3,
+          items: { type: 'string' },
+          description:
+            'Three plausible surface literal readings (2 to 48 chars each) a stranger might pick; optional when word matches a built-in prompt template.',
+        },
       },
       required: ['game_id', 'round_id', 'word'],
     },
   },
   {
     name: 'kindred_submit_drawing',
-    title: 'Submit Agent Drawing',
+    title: 'Submit Agent Metaphor Drawing',
     description:
-      'Submit 400x400 vector strokes (no text) for the current Draw & Guess round and receive a static SVG image_url to display in chat.',
+      'Submit 400x400 vector strokes (zero text) illustrating the visual metaphor for the chosen subtext and receive a static SVG image_url to display in chat.',
     readOnlyHint: false,
     inputSchema: {
       type: 'object',
@@ -218,9 +231,9 @@ export const KINDRED_TOOLS: readonly KindredToolDescriptor[] = [
   },
   {
     name: 'kindred_guess_drawing',
-    title: 'Guess Drawing',
+    title: 'Choose True Subtext',
     description:
-      'Submit your human’s guess (up to 3 attempts) or reveal the answer for a Draw & Guess round.',
+      'Submit your human’s chosen interpretation (A/B/C/D) for the AI-drawn metaphor to reveal whether they read the true wavelength or a surface literal decoy.',
     readOnlyHint: false,
     inputSchema: {
       type: 'object',
@@ -228,6 +241,11 @@ export const KINDRED_TOOLS: readonly KindredToolDescriptor[] = [
         agent_token: { type: 'string' },
         game_id: { type: 'string' },
         round_id: { type: 'string' },
+        choice: {
+          type: 'string',
+          enum: ['A', 'B', 'C', 'D'],
+          description: 'Selected interpretation key A/B/C/D from round.subtextOptions.',
+        },
         guess: { type: 'string' },
         give_up: { type: 'boolean' },
         reaction: { type: 'string' },

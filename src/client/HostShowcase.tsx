@@ -1,111 +1,176 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
+import type { Locale } from './i18n'
 
 interface HostItem {
   id: string
   name: string
+  icon: string
   accent: string
   glow: string
+  lightPlate?: boolean
+  roundAvatar?: boolean
 }
 
-const HOSTS: readonly HostItem[] = [
-  {
-    id: 'muse',
-    name: 'Meta Muse',
-    accent: '#a78bfa',
-    glow: 'rgba(167, 139, 250, 0.28)',
-  },
-  {
-    id: 'chatgpt',
-    name: 'ChatGPT',
-    accent: '#10a37f',
-    glow: 'rgba(16, 163, 127, 0.28)',
-  },
-  {
-    id: 'claude',
-    name: 'Claude',
-    accent: '#e07a52',
-    glow: 'rgba(224, 122, 82, 0.28)',
-  },
-  {
-    id: 'grok',
-    name: 'Grok',
-    accent: '#f7f4ee',
-    glow: 'rgba(247, 244, 238, 0.22)',
-  },
-  {
-    id: 'openclaw',
-    name: 'OpenClaw',
-    accent: '#ff5c35',
-    glow: 'rgba(255, 92, 53, 0.3)',
-  },
-] as const
-
-function HostIcon({ id, size = 18 }: { id: string; size?: number }) {
-  switch (id) {
-    case 'muse':
-      return (
-        <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true">
-          <path
-            d="M4.5 14.5C4.5 11.5 6.8 9.2 9.4 10.6L14.6 13.4C17.2 14.8 19.5 12.5 19.5 9.5C19.5 6.8 17.2 5.2 14.8 6.8L9.2 17.2C6.8 18.8 4.5 17.2 4.5 14.5Z"
-            stroke="currentColor"
-            strokeWidth="2.1"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-        </svg>
-      )
-    case 'chatgpt':
-      return (
-        <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true">
-          <circle cx="12" cy="12" r="3.2" stroke="currentColor" strokeWidth="1.9" />
-          <path
-            d="M12 3.5V7.5M12 16.5V20.5M4.6 7.8L8.1 9.8M15.9 14.2L19.4 16.2M19.4 7.8L15.9 9.8M8.1 14.2L4.6 16.2"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-          />
-          <circle cx="12" cy="12" r="8.5" stroke="currentColor" strokeWidth="1.4" strokeDasharray="4 3.5" />
-        </svg>
-      )
-    case 'claude':
-      return (
-        <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true">
-          <path
-            d="M12 2.5V21.5M2.5 12H21.5M5.3 5.3L18.7 18.7M18.7 5.3L5.3 18.7"
-            stroke="currentColor"
-            strokeWidth="2.2"
-            strokeLinecap="round"
-          />
-        </svg>
-      )
-    case 'grok':
-      return (
-        <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true">
-          <circle cx="12" cy="12" r="7.5" stroke="currentColor" strokeWidth="2.1" />
-          <path d="M5 19L19 5" stroke="currentColor" strokeWidth="2.3" strokeLinecap="round" />
-        </svg>
-      )
-    default:
-      return (
-        <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true">
-          <path
-            d="M6.5 4.5L10 19.5M12 3.5V20.5M17.5 4.5L14 19.5"
-            stroke="currentColor"
-            strokeWidth="2.2"
-            strokeLinecap="round"
-          />
-        </svg>
-      )
-  }
+const HOSTS_BY_LOCALE: Record<Locale, readonly HostItem[]> = {
+  zh: [
+    {
+      id: 'doubao',
+      name: '豆包',
+      icon: '/icons/doubao.png',
+      accent: '#f43f5e',
+      glow: 'rgba(244, 63, 94, 0.3)',
+      roundAvatar: true,
+    },
+    {
+      id: 'deepseek',
+      name: 'DeepSeek',
+      icon: '/icons/deepseek.svg',
+      accent: '#4d6bfe',
+      glow: 'rgba(77, 107, 254, 0.32)',
+      lightPlate: true,
+    },
+    {
+      id: 'workbuddy',
+      name: 'WorkBuddy',
+      icon: '/icons/workbuddy.svg',
+      accent: '#10b981',
+      glow: 'rgba(16, 185, 129, 0.3)',
+    },
+    {
+      id: 'kimi',
+      name: 'Kimi',
+      icon: '/icons/kimi.svg',
+      accent: '#1783ff',
+      glow: 'rgba(23, 131, 255, 0.3)',
+    },
+    {
+      id: 'qwen',
+      name: '通义千问',
+      icon: '/icons/qwen.svg',
+      accent: '#6366f1',
+      glow: 'rgba(99, 102, 241, 0.3)',
+      lightPlate: true,
+    },
+    {
+      id: 'yuanbao',
+      name: '元宝',
+      icon: '/icons/yuanbao.svg',
+      accent: '#22c55e',
+      glow: 'rgba(34, 197, 94, 0.28)',
+    },
+    {
+      id: 'muse',
+      name: 'Meta Muse',
+      icon: '/icons/muse.svg',
+      accent: '#0082fb',
+      glow: 'rgba(0, 130, 251, 0.3)',
+      lightPlate: true,
+    },
+    {
+      id: 'chatgpt',
+      name: 'ChatGPT',
+      icon: '/icons/chatgpt.svg',
+      accent: '#10a37f',
+      glow: 'rgba(16, 163, 127, 0.28)',
+    },
+    {
+      id: 'claude',
+      name: 'Claude',
+      icon: '/icons/claude.svg',
+      accent: '#e07a52',
+      glow: 'rgba(224, 122, 82, 0.3)',
+    },
+    {
+      id: 'openclaw',
+      name: 'OpenClaw',
+      icon: '/icons/openclaw.svg',
+      accent: '#ff5c35',
+      glow: 'rgba(255, 92, 53, 0.32)',
+    },
+  ],
+  en: [
+    {
+      id: 'chatgpt',
+      name: 'ChatGPT',
+      icon: '/icons/chatgpt.svg',
+      accent: '#10a37f',
+      glow: 'rgba(16, 163, 127, 0.28)',
+    },
+    {
+      id: 'claude',
+      name: 'Claude',
+      icon: '/icons/claude.svg',
+      accent: '#e07a52',
+      glow: 'rgba(224, 122, 82, 0.3)',
+    },
+    {
+      id: 'grok',
+      name: 'Grok',
+      icon: '/icons/grok.svg',
+      accent: '#f7f4ee',
+      glow: 'rgba(247, 244, 238, 0.22)',
+    },
+    {
+      id: 'gemini',
+      name: 'Gemini',
+      icon: '/icons/gemini.svg',
+      accent: '#4285f4',
+      glow: 'rgba(66, 133, 244, 0.32)',
+    },
+    {
+      id: 'perplexity',
+      name: 'Perplexity',
+      icon: '/icons/perplexity.svg',
+      accent: '#20b2aa',
+      glow: 'rgba(32, 178, 170, 0.3)',
+    },
+    {
+      id: 'deepseek',
+      name: 'DeepSeek',
+      icon: '/icons/deepseek.svg',
+      accent: '#4d6bfe',
+      glow: 'rgba(77, 107, 254, 0.32)',
+      lightPlate: true,
+    },
+    {
+      id: 'muse',
+      name: 'Meta Muse',
+      icon: '/icons/muse.svg',
+      accent: '#0082fb',
+      glow: 'rgba(0, 130, 251, 0.3)',
+      lightPlate: true,
+    },
+    {
+      id: 'openclaw',
+      name: 'OpenClaw',
+      icon: '/icons/openclaw.svg',
+      accent: '#ff5c35',
+      glow: 'rgba(255, 92, 53, 0.32)',
+    },
+  ],
 }
 
 interface HostShowcaseProps {
+  locale: Locale
   label: string
+  moreBadge: string
+  openProtocolNote: string
 }
 
-export default function HostShowcase({ label }: HostShowcaseProps) {
+export default function HostShowcase({
+  locale,
+  label,
+  moreBadge,
+  openProtocolNote,
+}: HostShowcaseProps) {
+  const hosts = HOSTS_BY_LOCALE[locale]
   const [activeIdx, setActiveIdx] = useState(0)
   const [paused, setPaused] = useState(false)
+  const tabRefs = useRef<Array<HTMLButtonElement | null>>([])
+
+  useEffect(() => {
+    setActiveIdx(0)
+  }, [locale])
 
   useEffect(() => {
     if (paused) return
@@ -115,12 +180,31 @@ export default function HostShowcase({ label }: HostShowcaseProps) {
     if (reduced) return
 
     const timer = window.setInterval(() => {
-      setActiveIdx((prev) => (prev + 1) % HOSTS.length)
-    }, 2100)
+      setActiveIdx((prev) => (prev + 1) % hosts.length)
+    }, 2400)
     return () => window.clearInterval(timer)
-  }, [paused])
+  }, [paused, hosts.length])
 
-  const active = HOSTS[activeIdx]!
+  const currentIdx = activeIdx % hosts.length
+  const active = hosts[currentIdx]!
+
+  const handleTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>, idx: number) => {
+    let nextIdx: number | null = null
+    if (event.key === 'ArrowRight' || event.key === 'ArrowDown') {
+      nextIdx = (idx + 1) % hosts.length
+    } else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') {
+      nextIdx = (idx - 1 + hosts.length) % hosts.length
+    } else if (event.key === 'Home') {
+      nextIdx = 0
+    } else if (event.key === 'End') {
+      nextIdx = hosts.length - 1
+    }
+    if (nextIdx === null) return
+    event.preventDefault()
+    setPaused(true)
+    setActiveIdx(nextIdx)
+    tabRefs.current[nextIdx]?.focus()
+  }
 
   return (
     <div
@@ -132,41 +216,69 @@ export default function HostShowcase({ label }: HostShowcaseProps) {
       onMouseEnter={() => setPaused(true)}
       onMouseLeave={() => setPaused(false)}
     >
-      <div className="host-reel-group">
-        <span className="host-prefix">{label}</span>
-        <div className="host-slot" aria-live="polite">
-          <div key={active.id} className="host-active-pill">
-            <span className="host-icon-badge" style={{ color: active.accent }}>
-              <HostIcon id={active.id} size={18} />
-            </span>
-            <span className="host-active-name">{active.name}</span>
+      <div className="host-top-row">
+        <div className="host-reel-group">
+          <span className="host-prefix">{label}</span>
+          <div className="host-slot" aria-live="polite">
+            <div key={`${locale}-${active.id}`} className="host-active-pill">
+              <span
+                className={`host-icon-badge ${active.lightPlate ? 'host-icon-badge--light' : ''}`}
+              >
+                <img
+                  src={active.icon}
+                  alt=""
+                  width={20}
+                  height={20}
+                  className={`host-logo-img ${active.roundAvatar ? 'host-logo-round' : ''}`}
+                />
+              </span>
+              <span className="host-active-name">{active.name}</span>
+            </div>
           </div>
+        </div>
+        <span className="host-more-chip">{moreBadge}</span>
+      </div>
+
+      <div className="host-dock-row">
+        <div className="host-pills" data-count={hosts.length} role="tablist" aria-label={label}>
+          {hosts.map((host, idx) => {
+            const isCurrent = idx === currentIdx
+            return (
+              <button
+                key={host.id}
+                ref={(el) => {
+                  tabRefs.current[idx] = el
+                }}
+                type="button"
+                role="tab"
+                tabIndex={isCurrent ? 0 : -1}
+                aria-selected={isCurrent}
+                aria-label={host.name}
+                title={host.name}
+                className={`host-dot-btn ${isCurrent ? 'host-dot-btn--active' : ''}`}
+                style={isCurrent ? { borderColor: host.accent } : undefined}
+                onClick={() => {
+                  setActiveIdx(idx)
+                  setPaused(true)
+                }}
+                onKeyDown={(event) => handleTabKeyDown(event, idx)}
+              >
+                <span className={host.lightPlate ? 'host-logo-plate' : 'host-logo-wrap'}>
+                  <img
+                    src={host.icon}
+                    alt=""
+                    width={18}
+                    height={18}
+                    className={`host-dot-img ${host.roundAvatar ? 'host-logo-round' : ''}`}
+                  />
+                </span>
+              </button>
+            )
+          })}
         </div>
       </div>
 
-      <div className="host-pills" role="tablist" aria-label={label}>
-        {HOSTS.map((host, idx) => {
-          const isCurrent = idx === activeIdx
-          return (
-            <button
-              key={host.id}
-              type="button"
-              role="tab"
-              aria-selected={isCurrent}
-              aria-label={host.name}
-              title={host.name}
-              className={`host-dot-btn ${isCurrent ? 'host-dot-btn--active' : ''}`}
-              style={isCurrent ? { color: host.accent, borderColor: host.accent } : undefined}
-              onClick={() => {
-                setActiveIdx(idx)
-                setPaused(true)
-              }}
-            >
-              <HostIcon id={host.id} size={15} />
-            </button>
-          )
-        })}
-      </div>
+      <span className="host-open-note">{openProtocolNote}</span>
     </div>
   )
 }

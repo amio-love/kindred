@@ -44,12 +44,11 @@ app.get('/img/:file', async (c) => {
   })
 })
 
-app.on(['GET', 'HEAD'], '/media/:file', async (c) => {
+app.on(['GET', 'HEAD'], '/media/*', async (c) => {
   const assetReq = new Request(c.req.url, { method: 'GET' })
   const assetRes = await c.env.ASSETS.fetch(assetReq)
-  if (!assetRes.ok) return assetRes
-
   const contentType = assetRes.headers.get('Content-Type') ?? 'application/octet-stream'
+  if (!assetRes.ok || contentType.startsWith('text/html')) return c.notFound()
   const buf = await assetRes.arrayBuffer()
   const total = buf.byteLength
   const baseHeaders = {

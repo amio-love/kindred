@@ -85,6 +85,12 @@ export interface Stroke {
   points: [number, number][]
 }
 
+export interface SubtextPromptTemplate {
+  subtext: string
+  visualHint: string
+  surfaceDecoys: readonly [string, string, string]
+}
+
 export type DrawRoundStatus =
   | 'picking_word'
   | 'awaiting_drawing'
@@ -96,9 +102,12 @@ export interface DrawRoundView {
   roundNumber: number
   role: 'drawer' | 'guesser'
   status: DrawRoundStatus
-  promptOptions?: string[]
+  guessMode: 'subtext_choice' | 'legacy_free_text'
+  promptOptions?: SubtextPromptTemplate[]
   secretWord?: string | null
-  wordLengthHint?: number | null
+  subtextOptions?: QuestionOptions | null
+  correctOption?: OptionKey | null
+  chosenOption?: OptionKey | null
   imageUrl?: string | null
   guessAttempts: number
   lastGuess?: string | null

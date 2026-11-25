@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
-import { isCorrectGuess, strokesToStaticSvg, validateStrokes } from './drawing'
+import {
+  buildShuffledSubtextOptions,
+  isCorrectGuess,
+  strokesToStaticSvg,
+  validateStrokes,
+} from './drawing'
 import { scanPii } from './pii'
 import {
   buildAgentSyncReport,
@@ -11,17 +16,52 @@ import {
 import type { StoredQuestion } from './types'
 
 describe('PII boundary scanner', () => {
-  test('blocks emails, phones, URLs, China IDs, and social handles', () => {
-    assert.equal(scanPii('联系我 alice@example.com').clean, false)
-    assert.equal(scanPii('电话 13800138000').clean, false)
-    assert.equal(scanPii('主页 https://example.org/me').clean, false)
-    assert.equal(scanPii('身份证 110101199001011234').clean, false)
-    assert.equal(scanPii('加我微信：my_handle_99').clean, false)
+  test('blocks emails, phones, international/spaced/fullwidth numbers, bare domains, QQ, and social handles', () => {
+    const blocked = [
+      '联系我 alice@example.com',
+      '电话 13800138000',
+      '电话 138 0013 8000',
+      '电话 +8613800138000',
+      '手机 １３８００１３８０００',
+      'whatsapp +447911123456',
+      'call +1 415-555-0199',
+      '主页 https://example.org/me',
+      '看看我的站点 kindred.dev/profile',
+      '频道 t.me/alice/',
+      '身份证 110101199001011234',
+      '加我微信：my_handle_99',
+      '加微信号:kindred_99',
+      '加微信 kindred_99',
+      '加我微信kindred_99',
+      'wx: my_id_01',
+      'wx kindred_99',
+      'line id alice_99',
+      '小红书: kind_99',
+      'QQ 123456789',
+      'find me @kindred_qa_99',
+      'tg: @kindred_bot',
+      'ins: quiet_reader',
+    ]
+    for (const sample of blocked) {
+      assert.equal(scanPii(sample).clean, false, `Expected PII block on: ${sample}`)
+    }
   })
 
-  test('allows specific non-identifying personal tastes and habits', () => {
-    const res = scanPii('挑一款新的洗发水时，先翻背面逐项查配方成分表，避开硅油和植物油。')
-    assert.equal(res.clean, true)
+  test('allows ordinary Chinese and English tastes without false positives on substrings like ins or tg', () => {
+    const allowed = [
+      '挑一款新的洗发水时，先翻背面逐项查配方成分表，避开硅油和植物油。',
+      '睡前刷小红书看露营攻略，但从不发帖。',
+      '微信2024年度报告里全是深夜群聊。',
+      'I would rather read instead of sleeping early.',
+      'Revenge insomnia and midnight playlists.',
+      'Instant click when someone shares quiet insight.',
+      'Inspired by trains in the rain and late-night vitamins.',
+      'Mortgages, insurance, and scrolling Instagram before bed.',
+      'Waiting in line for coffee when phone signal: weak.',
+    ]
+    for (const sample of allowed) {
+      assert.equal(scanPii(sample).clean, true, `Unexpected PII false positive on: ${sample}`)
+    }
   })
 })
 
@@ -157,9 +197,30 @@ describe('Static SVG drawing compiler and guess matching', () => {
     }
   })
 
+  test('shuffles 1 true subtext with 3 surface literal decoys into varying keys while preserving all texts', () => {
+    const trueSubtext = '舍不得今天结束的报复性熬夜'
+    const decoys = ['半夜还在赶方案加班', '忘了关电脑就睡着了', '晚上喝太多茶失眠了'] as const
+
+    const first = buildShuffledSubtextOptions(trueSubtext, decoys, () => 0)
+    const second = buildShuffledSubtextOptions(trueSubtext, decoys, () => 0.99)
+
+    assert.equal(first.options[first.correctOption], trueSubtext)
+    assert.equal(second.options[second.correctOption], trueSubtext)
+    assert.notEqual(first.correctOption, second.correctOption)
+
+    for (const result of [first, second]) {
+      const values = new Set(Object.values(result.options))
+      assert.equal(values.size, 4)
+      assert.ok(values.has(trueSubtext))
+      for (const decoy of decoys) {
+        assert.ok(values.has(decoy))
+      }
+    }
+  })
+
   test('matches normalized Chinese and English guesses', () => {
-    assert.equal(isCorrectGuess('戴墨镜的猫', '  戴墨镜的猫！ '), true)
-    assert.equal(isCorrectGuess('长翅膀的咖啡杯', '长翅膀的咖啡'), true)
-    assert.equal(isCorrectGuess('戴墨镜的猫', '猫'), false)
+    assert.equal(isCorrectGuess('湘北平交道的那个夏天', '  湘北平交道的那个夏天！ '), true)
+    assert.equal(isCorrectGuess('舍不得今天结束的报复性熬夜', '舍不得今天结束的报复性熬夜'), true)
+    assert.equal(isCorrectGuess('湘北平交道的那个夏天', '夏天'), false)
   })
 })

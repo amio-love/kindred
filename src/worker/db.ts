@@ -1,3 +1,4 @@
+import { pickRoundPrompts } from '../shared/drawing'
 import type {
   AnswerChoice,
   AnswerEntry,
@@ -8,6 +9,7 @@ import type {
   PairingStatus,
   QuestionOptions,
   StoredQuestion,
+  SubtextPromptTemplate,
 } from '../shared/types'
 import { randomToken, sha256Hex } from './env'
 
@@ -49,6 +51,8 @@ export interface DrawRoundRow {
   status: DrawRoundStatus
   prompt_options_json: string
   secret_word: string | null
+  subtext_options_json: string | null
+  correct_option: OptionKey | null
   svg_markup: string | null
   guess_attempts: number
   last_guess: string | null
@@ -205,6 +209,28 @@ export async function ensurePoolPairingsForAgent(db: D1Database, agentId: string
   return created
 }
 
+function normalizePromptOptions(rawJson: string, roundNumber: number): SubtextPromptTemplate[] {
+  try {
+    const parsed = JSON.parse(rawJson) as unknown
+    if (
+      Array.isArray(parsed) &&
+      parsed.length > 0 &&
+      parsed.every(
+        (item) =>
+          item &&
+          typeof item === 'object' &&
+          typeof (item as SubtextPromptTemplate).subtext === 'string' &&
+          Array.isArray((item as SubtextPromptTemplate).surfaceDecoys) &&
+          (item as SubtextPromptTemplate).surfaceDecoys.length === 3,
+      )
+    ) {
+      return parsed as SubtextPromptTemplate[]
+    }
+  } catch {
+  }
+  return pickRoundPrompts([], roundNumber)
+}
+
 export function formatDrawRoundView(
   row: DrawRoundRow,
   viewerAgentId: string,
@@ -212,16 +238,34 @@ export function formatDrawRoundView(
 ): DrawRoundView {
   const isDrawer = row.drawer_agent_id === viewerAgentId
   const canSeeSecret = isDrawer || row.status === 'revealed'
+  const canSeeOptions = isDrawer || row.status === 'awaiting_guess' || row.status === 'revealed'
   const base = origin.replace(/\/+$/, '')
+  const hasSubtextChoices = Boolean(row.subtext_options_json && row.correct_option)
+  const guessMode =
+    row.status === 'picking_word' || hasSubtextChoices ? 'subtext_choice' : 'legacy_free_text'
+  const subtextOptions =
+    canSeeOptions && row.subtext_options_json
+      ? (JSON.parse(row.subtext_options_json) as QuestionOptions)
+      : null
+  const chosenOption =
+    row.last_guess === 'A' || row.last_guess === 'B' || row.last_guess === 'C' || row.last_guess === 'D'
+      ? row.last_guess
+      : null
 
   return {
     id: row.id,
     roundNumber: row.round_number,
     role: isDrawer ? 'drawer' : 'guesser',
     status: row.status,
-    promptOptions: isDrawer && row.status === 'picking_word' ? (JSON.parse(row.prompt_options_json) as string[]) : undefined,
+    guessMode,
+    promptOptions:
+      isDrawer && row.status === 'picking_word'
+        ? normalizePromptOptions(row.prompt_options_json, row.round_number)
+        : undefined,
     secretWord: canSeeSecret ? row.secret_word : null,
-    wordLengthHint: row.secret_word ? Array.from(row.secret_word.replace(/\s+/g, '')).length : null,
+    subtextOptions,
+    correctOption: canSeeSecret ? row.correct_option : null,
+    chosenOption: row.status === 'revealed' ? chosenOption : null,
     imageUrl: row.svg_markup ? `${base}/img/${row.id}.svg` : null,
     guessAttempts: row.guess_attempts,
     lastGuess: row.last_guess,

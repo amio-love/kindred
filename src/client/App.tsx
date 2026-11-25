@@ -129,7 +129,12 @@ export default function App() {
                 </button>
               </div>
 
-              <HostShowcase label={copy.worksWith} />
+              <HostShowcase
+                locale={locale}
+                label={copy.worksWith}
+                moreBadge={copy.moreHostsBadge}
+                openProtocolNote={copy.openProtocolNote}
+              />
 
               <ul className="trust-row">
                 {copy.trustItems.map((item) => (

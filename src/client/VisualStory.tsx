@@ -8,12 +8,24 @@ interface VisualStoryProps {
 }
 
 const SIGNAL_TOKENS = ['B', 'D', 'U', 'A', 'C'] as const
+const OPTION_LETTERS = ['A', 'B', 'C', 'D'] as const
 
 export default function VisualStory({ copy, copied, onCopy }: VisualStoryProps) {
-  const [revealedIds, setRevealedIds] = useState<Record<string, boolean>>({})
+  const [picks, setPicks] = useState<Record<string, number>>({})
 
-  const toggleReveal = (id: string) => {
-    setRevealedIds((prev) => ({ ...prev, [id]: !prev[id] }))
+  const handlePick = (cardId: string, optionIdx: number) => {
+    setPicks((prev) => {
+      if (prev[cardId] !== undefined) return prev
+      return { ...prev, [cardId]: optionIdx }
+    })
+  }
+
+  const handleReset = (cardId: string) => {
+    setPicks((prev) => {
+      const next = { ...prev }
+      delete next[cardId]
+      return next
+    })
   }
 
   return (
@@ -24,33 +36,81 @@ export default function VisualStory({ copy, copied, onCopy }: VisualStoryProps) 
           <p>{copy.galleryHint}</p>
         </div>
 
-        <div className="polaroid-grid">
-          {copy.sketches.map((item, idx) => {
-            const isOpen = Boolean(revealedIds[item.id])
+        <div className="subtext-grid">
+          {copy.subtextCards.map((card) => {
+            const picked = picks[card.id]
+            const hasPicked = picked !== undefined
+            const hit = picked === card.correctIndex
+
             return (
-              <button
-                key={item.id}
-                type="button"
-                className={`polaroid polaroid--${idx + 1} ${isOpen ? 'polaroid--open' : ''}`}
-                onClick={() => toggleReveal(item.id)}
-              >
-                <div className="polaroid-img-wrap">
+              <article key={card.id} className={`subtext-card ${hit ? 'subtext-card--hit' : ''}`}>
+                <div className="subtext-art-wrap">
                   <img
-                    src={item.src}
-                    alt={item.alt}
-                    className="polaroid-img"
+                    src={card.src}
+                    alt={card.alt}
+                    className="subtext-art"
                     loading="lazy"
-                    width={320}
-                    height={320}
+                    width={360}
+                    height={360}
                   />
+                  <span className="subtext-art-badge">{card.artBadge}</span>
                 </div>
-                <div className="polaroid-foot">
-                  <span className="polaroid-hint">{item.hint}</span>
-                  <span className="polaroid-answer">
-                    {isOpen ? item.answer : copy.revealPromptLabel}
-                  </span>
+
+                <div className="subtext-choices" role="group" aria-label={card.alt}>
+                  {card.options.map((optText, idx) => {
+                    const isPicked = picked === idx
+                    const isCorrect = idx === card.correctIndex
+                    const stateClass =
+                      hasPicked && isCorrect
+                        ? 'subtext-opt--hit'
+                        : isPicked && !isCorrect
+                          ? 'subtext-opt--surface'
+                          : hasPicked
+                            ? 'subtext-opt--dim'
+                            : ''
+
+                    return (
+                      <button
+                        key={optText}
+                        type="button"
+                        disabled={hasPicked}
+                        className={`subtext-opt ${stateClass}`}
+                        aria-pressed={isPicked}
+                        onClick={() => handlePick(card.id, idx)}
+                      >
+                        <span className="subtext-opt-key">{OPTION_LETTERS[idx]}</span>
+                        <span className="subtext-opt-text">{optText}</span>
+                        {isPicked && !isCorrect && (
+                          <span className="subtext-opt-tag">{copy.surfaceTag}</span>
+                        )}
+                        {hasPicked && isCorrect && (
+                          <span className="subtext-opt-tag subtext-opt-tag--hit">
+                            {copy.wavelengthTag}
+                          </span>
+                        )}
+                      </button>
+                    )
+                  })}
                 </div>
-              </button>
+
+                <div className="subtext-feedback" aria-live="polite">
+                  {!hasPicked && <span className="subtext-idle">{copy.pickPromptLabel}</span>}
+                  {hasPicked && (
+                    <div className="subtext-result-row">
+                      <span className={hit ? 'subtext-hit-note' : 'subtext-surface-note'}>
+                        {hit ? card.hitNote : copy.surfaceRetryNote}
+                      </span>
+                      <button
+                        type="button"
+                        className="subtext-retry-btn"
+                        onClick={() => handleReset(card.id)}
+                      >
+                        {copy.retryCardLabel}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </article>
             )
           })}
         </div>

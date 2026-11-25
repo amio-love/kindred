@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type KeyboardEvent, type MouseEvent } from 'react'
 import type { CopyBundle, Locale } from './i18n'
 
 interface HeroVideoProps {
@@ -7,11 +7,12 @@ interface HeroVideoProps {
   onResonanceBoost?: (boost: number) => void
 }
 
-const CHAPTER_STARTS = [0, 5.2, 9.8] as const
+const CHAPTER_STARTS = [0, 8.15, 10.0] as const
 const TOTAL_DURATION = 15
 
 export default function HeroVideo({ locale, copy, onResonanceBoost }: HeroVideoProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null)
+  const chapterRefs = useRef<Array<HTMLButtonElement | null>>([])
   const [playing, setPlaying] = useState(true)
   const [progress, setProgress] = useState(0)
   const [activeChapter, setActiveChapter] = useState(0)
@@ -86,13 +87,45 @@ export default function HeroVideo({ locale, copy, onResonanceBoost }: HeroVideoP
     }
   }
 
-  const handleProgressClick = (event: React.MouseEvent<HTMLDivElement>) => {
+  const handleChapterKeyDown = (event: KeyboardEvent<HTMLButtonElement>, idx: number) => {
+    const count = copy.videoChapters.length
+    let nextIdx: number | null = null
+    if (event.key === 'ArrowRight') nextIdx = (idx + 1) % count
+    else if (event.key === 'ArrowLeft') nextIdx = (idx - 1 + count) % count
+    else if (event.key === 'Home') nextIdx = 0
+    else if (event.key === 'End') nextIdx = count - 1
+    if (nextIdx === null) return
+    event.preventDefault()
+    seekToChapter(nextIdx)
+    chapterRefs.current[nextIdx]?.focus()
+  }
+
+  const handleProgressClick = (event: MouseEvent<HTMLDivElement>) => {
     const video = videoRef.current
     if (!video) return
     const rect = event.currentTarget.getBoundingClientRect()
     const ratio = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width))
     const dur = Number.isFinite(video.duration) && video.duration > 0 ? video.duration : TOTAL_DURATION
     video.currentTime = ratio * dur
+  }
+
+  const handleScrubberKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    const video = videoRef.current
+    if (!video) return
+    const dur = Number.isFinite(video.duration) && video.duration > 0 ? video.duration : TOTAL_DURATION
+    if (event.key === 'ArrowRight') {
+      event.preventDefault()
+      video.currentTime = Math.min(dur, video.currentTime + 1)
+    } else if (event.key === 'ArrowLeft') {
+      event.preventDefault()
+      video.currentTime = Math.max(0, video.currentTime - 1)
+    } else if (event.key === 'Home') {
+      event.preventDefault()
+      video.currentTime = 0
+    } else if (event.key === 'End') {
+      event.preventDefault()
+      video.currentTime = Math.max(0, dur - 0.1)
+    }
   }
 
   const handleFullscreen = () => {
@@ -106,6 +139,8 @@ export default function HeroVideo({ locale, copy, onResonanceBoost }: HeroVideoP
       video.webkitEnterFullscreen()
     }
   }
+
+  const currentSeconds = Math.round(progress * TOTAL_DURATION)
 
   return (
     <div className="stage">
@@ -140,12 +175,15 @@ export default function HeroVideo({ locale, copy, onResonanceBoost }: HeroVideoP
         <div className="cinema-dock">
           <div
             className="cinema-scrubber"
-            role="progressbar"
+            role="slider"
+            tabIndex={0}
             aria-label={copy.videoProgressLabel}
             aria-valuemin={0}
-            aria-valuemax={100}
-            aria-valuenow={Math.round(progress * 100)}
+            aria-valuemax={TOTAL_DURATION}
+            aria-valuenow={currentSeconds}
+            aria-valuetext={`${currentSeconds}s / ${TOTAL_DURATION}s`}
             onClick={handleProgressClick}
+            onKeyDown={handleScrubberKeyDown}
           >
             <div className="cinema-scrubber-fill" style={{ transform: `scaleX(${progress})` }} />
           </div>
@@ -157,11 +195,16 @@ export default function HeroVideo({ locale, copy, onResonanceBoost }: HeroVideoP
                 return (
                   <button
                     key={label}
+                    ref={(el) => {
+                      chapterRefs.current[idx] = el
+                    }}
                     type="button"
                     role="tab"
+                    tabIndex={isActive ? 0 : -1}
                     aria-selected={isActive}
                     className={`cinema-chapter ${isActive ? 'cinema-chapter--active' : ''}`}
                     onClick={() => seekToChapter(idx)}
+                    onKeyDown={(event) => handleChapterKeyDown(event, idx)}
                   >
                     <span className="cinema-chapter-dot" aria-hidden="true" />
                     <span>{label}</span>

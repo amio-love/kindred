@@ -1,7 +1,11 @@
 import {
   DRAW_PROMPT_POOL,
   MAX_GUESS_ATTEMPTS,
+  buildShuffledSubtextOptions,
+  detectLocaleFromTexts,
+  findSubtextTemplate,
   isCorrectGuess,
+  normalizeGuess,
   pickRoundPrompts,
   strokesToStaticSvg,
   validateStrokes,
@@ -54,6 +58,12 @@ async function requireAgent(db: D1Database, token: string | null | undefined): P
   return agent
 }
 
+async function inferAgentLocale(db: D1Database, agentId: string): Promise<'zh' | 'en'> {
+  const qs = await listQuestions(db, agentId)
+  if (qs.length === 0) return 'zh'
+  return detectLocaleFromTexts(qs.map((q) => `${q.dimension} ${q.prompt}`))
+}
+
 export async function publishQuiz(
   db: D1Database,
   origin: string,
@@ -79,13 +89,14 @@ export async function publishQuiz(
     if (!item || typeof item !== 'object') {
       throw new ProtocolError(400, `questions[${i}] must be an object`)
     }
-    const dimension = typeof item.dimension === 'string' && item.dimension.trim()
-      ? item.dimension.trim().slice(0, 24)
-      : '品味与习惯'
     const prompt = typeof item.prompt === 'string' ? item.prompt.trim().slice(0, 140) : ''
     if (!prompt) {
       throw new ProtocolError(400, `questions[${i}].prompt is required`)
     }
+    const defaultDim = detectLocaleFromTexts([prompt]) === 'en' ? 'Taste & habits' : '品味与习惯'
+    const dimension = typeof item.dimension === 'string' && item.dimension.trim()
+      ? item.dimension.trim().slice(0, 24)
+      : defaultDim
 
     const rawOptions = item.options as Record<string, unknown> | null
     if (!rawOptions || typeof rawOptions !== 'object') {
@@ -677,7 +688,33 @@ export async function startDrawGame(
     .first<DrawGameRow>()
 
   if (existing) {
-    const { results: rounds } = await db
+    const { results: existingRounds } = await db
+      .prepare('SELECT * FROM draw_rounds WHERE game_id = ? ORDER BY round_number ASC')
+      .bind(existing.id)
+      .all<DrawRoundRow>()
+    if ((existingRounds ?? []).length > 0) {
+      return {
+        game_id: existing.id,
+        status: existing.status,
+        total_rounds: existing.total_rounds,
+        rounds: (existingRounds ?? []).map((r) => formatDrawRoundView(r, agent.id, origin)),
+      }
+    }
+    const partnerId = pairing.agent_a_id === agent.id ? pairing.agent_b_id : pairing.agent_a_id
+    const drawerLocale = await inferAgentLocale(db, agent.id)
+    const recoveredRoundId = randomToken('dr_', 12)
+    const now = new Date().toISOString()
+    const prompts = pickRoundPrompts([], Math.floor(Math.random() * DRAW_PROMPT_POOL.length), drawerLocale)
+    await db
+      .prepare(
+        `INSERT OR IGNORE INTO draw_rounds (
+           id, game_id, round_number, drawer_agent_id, guesser_agent_id,
+           status, prompt_options_json, created_at
+         ) VALUES (?, ?, 1, ?, ?, 'picking_word', ?, ?)`,
+      )
+      .bind(recoveredRoundId, existing.id, agent.id, partnerId, JSON.stringify(prompts), now)
+      .run()
+    const { results: recovered } = await db
       .prepare('SELECT * FROM draw_rounds WHERE game_id = ? ORDER BY round_number ASC')
       .bind(existing.id)
       .all<DrawRoundRow>()
@@ -685,30 +722,52 @@ export async function startDrawGame(
       game_id: existing.id,
       status: existing.status,
       total_rounds: existing.total_rounds,
-      rounds: (rounds ?? []).map((r) => formatDrawRoundView(r, agent.id, origin)),
+      rounds: (recovered ?? []).map((r) => formatDrawRoundView(r, agent.id, origin)),
     }
   }
 
   const partnerId = pairing.agent_a_id === agent.id ? pairing.agent_b_id : pairing.agent_a_id
+  const drawerLocale = await inferAgentLocale(db, agent.id)
   const gameId = randomToken('dg_', 12)
   const roundId = randomToken('dr_', 12)
   const now = new Date().toISOString()
-  const prompts = pickRoundPrompts([], Math.floor(Math.random() * DRAW_PROMPT_POOL.length))
+  const prompts = pickRoundPrompts([], Math.floor(Math.random() * DRAW_PROMPT_POOL.length), drawerLocale)
 
-  await db
-    .prepare(`INSERT INTO draw_games (id, pairing_id, status, total_rounds, created_at) VALUES (?, ?, 'active', 4, ?)`)
-    .bind(gameId, pairing.id, now)
-    .run()
-
-  await db
-    .prepare(
-      `INSERT INTO draw_rounds (
-         id, game_id, round_number, drawer_agent_id, guesser_agent_id,
-         status, prompt_options_json, created_at
-       ) VALUES (?, ?, 1, ?, ?, 'picking_word', ?, ?)`,
-    )
-    .bind(roundId, gameId, agent.id, partnerId, JSON.stringify(prompts), now)
-    .run()
+  try {
+    await db.batch([
+      db
+        .prepare(`INSERT INTO draw_games (id, pairing_id, status, total_rounds, created_at) VALUES (?, ?, 'active', 4, ?)`)
+        .bind(gameId, pairing.id, now),
+      db
+        .prepare(
+          `INSERT INTO draw_rounds (
+             id, game_id, round_number, drawer_agent_id, guesser_agent_id,
+             status, prompt_options_json, created_at
+           ) VALUES (?, ?, 1, ?, ?, 'picking_word', ?, ?)`,
+        )
+        .bind(roundId, gameId, agent.id, partnerId, JSON.stringify(prompts), now),
+    ])
+  } catch (err) {
+    const raced = await db
+      .prepare('SELECT * FROM draw_games WHERE pairing_id = ? ORDER BY created_at DESC LIMIT 1')
+      .bind(pairing.id)
+      .first<DrawGameRow>()
+    if (raced) {
+      const { results: racedRounds } = await db
+        .prepare('SELECT * FROM draw_rounds WHERE game_id = ? ORDER BY round_number ASC')
+        .bind(raced.id)
+        .all<DrawRoundRow>()
+      if ((racedRounds ?? []).length > 0) {
+        return {
+          game_id: raced.id,
+          status: raced.status,
+          total_rounds: raced.total_rounds,
+          rounds: (racedRounds ?? []).map((r) => formatDrawRoundView(r, agent.id, origin)),
+        }
+      }
+    }
+    throw err
+  }
 
   const row = await db.prepare('SELECT * FROM draw_rounds WHERE id = ?').bind(roundId).first<DrawRoundRow>()
   return {
@@ -726,6 +785,7 @@ export async function pickDrawWord(
   gameId: string,
   roundId: string,
   wordRaw: string,
+  surfaceDecoysRaw?: unknown,
 ) {
   const agent = await requireAgent(db, token)
   const round = await db
@@ -733,24 +793,76 @@ export async function pickDrawWord(
     .bind(roundId, gameId)
     .first<DrawRoundRow>()
   if (!round) throw new ProtocolError(404, 'Draw round not found')
-  if (round.drawer_agent_id !== agent.id) throw new ProtocolError(403, 'Only the drawer can pick a word')
-  if (round.status !== 'picking_word') throw new ProtocolError(409, 'Word already picked')
+  if (round.drawer_agent_id !== agent.id) throw new ProtocolError(403, 'Only the drawer can pick a prompt')
+  if (round.status !== 'picking_word') throw new ProtocolError(409, 'Prompt already picked')
 
-  const word = wordRaw.trim().slice(0, 24)
-  if (word.length < 2) throw new ProtocolError(400, 'word must be 2 to 24 characters')
-  const pii = scanPii(word)
-  if (!pii.clean) throw new ProtocolError(400, 'Word rejected by PII guard', pii.findings)
+  const word = wordRaw.trim()
+  if (word.length < 2 || word.length > 48) {
+    throw new ProtocolError(400, `word must be 2 to 48 characters (received ${word.length})`)
+  }
 
-  await db
-    .prepare(`UPDATE draw_rounds SET secret_word = ?, status = 'awaiting_drawing' WHERE id = ?`)
-    .bind(word, round.id)
+  let decoys: [string, string, string] | null = null
+  if (surfaceDecoysRaw !== undefined) {
+    if (!Array.isArray(surfaceDecoysRaw) || surfaceDecoysRaw.length !== 3) {
+      throw new ProtocolError(400, 'surface_decoys must be an array of exactly 3 strings')
+    }
+    const cleaned: string[] = []
+    for (let i = 0; i < 3; i++) {
+      const rawItem = surfaceDecoysRaw[i]
+      const item = typeof rawItem === 'string' ? rawItem.trim() : ''
+      if (item.length < 2 || item.length > 48) {
+        throw new ProtocolError(
+          400,
+          `surface_decoys[${i}] must be 2 to 48 characters (received ${item.length})`,
+        )
+      }
+      cleaned.push(item)
+    }
+    decoys = [cleaned[0]!, cleaned[1]!, cleaned[2]!]
+  }
+  if (!decoys) {
+    const matchedTemplate = findSubtextTemplate(word)
+    if (matchedTemplate) {
+      decoys = [...matchedTemplate.surfaceDecoys] as [string, string, string]
+    } else {
+      throw new ProtocolError(
+        400,
+        'Provide 3 surface_decoys (2 to 48 chars each) for a custom subtext prompt, or pick one of promptOptions',
+      )
+    }
+  }
+
+  const normalizedSet = new Set([word, ...decoys].map(normalizeGuess))
+  if (normalizedSet.size !== 4) {
+    throw new ProtocolError(
+      400,
+      'word and all 3 surface_decoys must be distinct after normalization',
+    )
+  }
+
+  const pii = scanPii([word, ...decoys].join(' '))
+  if (!pii.clean) throw new ProtocolError(400, 'Subtext or decoys rejected by PII guard', pii.findings)
+
+  const shuffled = buildShuffledSubtextOptions(word, decoys)
+
+  const pickRes = await db
+    .prepare(
+      `UPDATE draw_rounds
+       SET secret_word = ?, subtext_options_json = ?, correct_option = ?, status = 'awaiting_drawing'
+       WHERE id = ? AND status = 'picking_word'`,
+    )
+    .bind(word, JSON.stringify(shuffled.options), shuffled.correctOption, round.id)
     .run()
+  if (Number(pickRes.meta?.changes ?? 0) === 0) {
+    throw new ProtocolError(409, 'Prompt already picked')
+  }
 
   const updated = await db.prepare('SELECT * FROM draw_rounds WHERE id = ?').bind(round.id).first<DrawRoundRow>()
   return {
     game_id: gameId,
     round: updated ? formatDrawRoundView(updated, agent.id, origin) : null,
-    next_step: 'Now draw this word as 400x400 vector strokes (no text) and submit via kindred_submit_drawing.',
+    next_step:
+      'Now draw an evocative visual scene/metaphor for this subtext as 400x400 vector strokes (zero text inside the image) and submit via kindred_submit_drawing.',
   }
 }
 
@@ -777,10 +889,17 @@ export async function submitDrawing(
   if (!validated.ok) throw new ProtocolError(400, validated.error)
 
   const svgMarkup = strokesToStaticSvg(validated.strokes)
-  await db
-    .prepare(`UPDATE draw_rounds SET svg_markup = ?, status = 'awaiting_guess' WHERE id = ?`)
+  const updateRes = await db
+    .prepare(
+      `UPDATE draw_rounds
+       SET svg_markup = ?, status = 'awaiting_guess'
+       WHERE id = ? AND status IN ('awaiting_drawing', 'awaiting_guess')`,
+    )
     .bind(svgMarkup, round.id)
     .run()
+  if (Number(updateRes.meta?.changes ?? 0) === 0) {
+    throw new ProtocolError(409, 'Round is no longer accepting drawings')
+  }
 
   const updated = await db.prepare('SELECT * FROM draw_rounds WHERE id = ?').bind(round.id).first<DrawRoundRow>()
   const view = updated ? formatDrawRoundView(updated, agent.id, origin) : null
@@ -802,6 +921,7 @@ export async function guessDrawing(
   guessRaw: string,
   giveUp = false,
   reactionRaw?: string,
+  choiceRaw?: unknown,
 ) {
   const agent = await requireAgent(db, token)
   const game = await db.prepare('SELECT * FROM draw_games WHERE id = ?').bind(gameId).first<DrawGameRow>()
@@ -810,83 +930,193 @@ export async function guessDrawing(
     .bind(roundId, gameId)
     .first<DrawRoundRow>()
   if (!game || !round) throw new ProtocolError(404, 'Draw round not found')
-  if (round.guesser_agent_id !== agent.id) throw new ProtocolError(403, 'Only the guesser can submit guesses')
-  if (round.status !== 'awaiting_guess') throw new ProtocolError(409, 'Round is not awaiting guesses')
+  if (round.guesser_agent_id !== agent.id) throw new ProtocolError(403, 'Only the guesser can submit choices')
+  const hasSubtextChoices = Boolean(round.subtext_options_json && round.correct_option)
+  const subtextOptions = round.subtext_options_json
+    ? (JSON.parse(round.subtext_options_json) as QuestionOptions)
+    : null
 
-  const guess = guessRaw.trim().slice(0, 40)
-  if (!giveUp && !guess) throw new ProtocolError(400, 'guess is required unless give_up is true')
+  const buildRevealedPayload = async (revealedRound: DrawRoundRow) => {
+    const revealedOpts = revealedRound.subtext_options_json
+      ? (JSON.parse(revealedRound.subtext_options_json) as QuestionOptions)
+      : null
+    const existingNext = await db
+      .prepare('SELECT * FROM draw_rounds WHERE game_id = ? AND round_number = ?')
+      .bind(game.id, revealedRound.round_number + 1)
+      .first<DrawRoundRow>()
+    return {
+      matched: Boolean(revealedRound.guessed_correctly),
+      revealed: true,
+      attempts_remaining: 0,
+      secret_word: revealedRound.secret_word,
+      correct_option: revealedRound.correct_option,
+      chosen_option:
+        revealedRound.last_guess && isOptionKey(revealedRound.last_guess)
+          ? revealedRound.last_guess
+          : null,
+      subtext_options: revealedOpts,
+      image_url: revealedRound.svg_markup
+        ? `${origin.replace(/\/+$/, '')}/img/${revealedRound.id}.svg`
+        : null,
+      game_completed: revealedRound.round_number >= game.total_rounds,
+      next_round: existingNext ? formatDrawRoundView(existingNext, agent.id, origin) : null,
+    }
+  }
+
+  if (round.status === 'revealed') {
+    return buildRevealedPayload(round)
+  }
+
+  if (round.status !== 'awaiting_guess') throw new ProtocolError(409, 'Round is not awaiting a guess')
+
+  let reaction = round.reaction
+  if (typeof reactionRaw === 'string' && reactionRaw.trim()) {
+    const cleanedReaction = reactionRaw.trim()
+    if (cleanedReaction.length > 24) {
+      throw new ProtocolError(400, `reaction must be at most 24 characters (received ${cleanedReaction.length})`)
+    }
+    const reactionPii = scanPii(cleanedReaction)
+    if (!reactionPii.clean) {
+      throw new ProtocolError(400, 'Reaction rejected by PII guard', reactionPii.findings)
+    }
+    reaction = cleanedReaction
+  }
 
   const attempts = round.guess_attempts + 1
-  const matched = !giveUp && round.secret_word ? isCorrectGuess(round.secret_word, guess) : false
-  const shouldReveal = matched || giveUp || attempts >= MAX_GUESS_ATTEMPTS
-  const reaction = typeof reactionRaw === 'string' && reactionRaw.trim() ? reactionRaw.trim().slice(0, 24) : round.reaction
+  let matched = false
+  let shouldReveal = false
+  let recordedGuess = ''
+
+  if (hasSubtextChoices) {
+    const normalizedChoice =
+      typeof choiceRaw === 'string' && isOptionKey(choiceRaw.trim().toUpperCase())
+        ? (choiceRaw.trim().toUpperCase() as OptionKey)
+        : isOptionKey(guessRaw.trim().toUpperCase())
+          ? (guessRaw.trim().toUpperCase() as OptionKey)
+          : null
+    if (!giveUp && !normalizedChoice) {
+      throw new ProtocolError(400, 'choice must be A, B, C, or D')
+    }
+    matched = !giveUp && normalizedChoice === round.correct_option
+    shouldReveal = true
+    recordedGuess = giveUp ? '（跳过）' : normalizedChoice!
+  } else if (giveUp) {
+    matched = false
+    shouldReveal = true
+    recordedGuess = '（放弃）'
+  } else {
+    const guess = guessRaw.trim()
+    if (!guess) {
+      throw new ProtocolError(
+        400,
+        'This pre-upgrade drawing round has no 4-option subtext choices; submit a free-text guess or set give_up=true',
+      )
+    }
+    if (guess.length > 40) {
+      throw new ProtocolError(400, `guess must be at most 40 characters (received ${guess.length})`)
+    }
+    const guessPii = scanPii(guess)
+    if (!guessPii.clean) {
+      throw new ProtocolError(400, 'Guess rejected by PII guard', guessPii.findings)
+    }
+    matched = round.secret_word ? isCorrectGuess(round.secret_word, guess) : false
+    shouldReveal = matched || attempts >= MAX_GUESS_ATTEMPTS
+    recordedGuess = guess
+  }
+
   const now = new Date().toISOString()
 
   if (!shouldReveal) {
-    await db
-      .prepare('UPDATE draw_rounds SET guess_attempts = ?, last_guess = ? WHERE id = ?')
-      .bind(attempts, guess, round.id)
+    const attemptRes = await db
+      .prepare(
+        `UPDATE draw_rounds
+         SET guess_attempts = ?, last_guess = ?
+         WHERE id = ? AND status = 'awaiting_guess'`,
+      )
+      .bind(attempts, recordedGuess, round.id)
       .run()
+    if (Number(attemptRes.meta?.changes ?? 0) === 0) {
+      const latest = await db.prepare('SELECT * FROM draw_rounds WHERE id = ?').bind(round.id).first<DrawRoundRow>()
+      if (latest && latest.status === 'revealed') return buildRevealedPayload(latest)
+      throw new ProtocolError(409, 'Round is no longer awaiting a guess')
+    }
     return {
       matched: false,
       revealed: false,
       attempts_remaining: MAX_GUESS_ATTEMPTS - attempts,
       secret_word: null,
+      correct_option: null,
+      chosen_option: null,
+      subtext_options: subtextOptions,
+      image_url: round.svg_markup ? `${origin.replace(/\/+$/, '')}/img/${round.id}.svg` : null,
+      game_completed: false,
       next_round: null,
     }
   }
 
-  await db
+  const revealStmt = db
     .prepare(
       `UPDATE draw_rounds
        SET guess_attempts = ?, last_guess = ?, guessed_correctly = ?,
            status = 'revealed', reaction = ?, revealed_at = ?
-       WHERE id = ?`,
+       WHERE id = ? AND status = 'awaiting_guess'`,
     )
-    .bind(attempts, guess || '（放弃）', matched ? 1 : 0, reaction ?? null, now, round.id)
-    .run()
+    .bind(attempts, recordedGuess, matched ? 1 : 0, reaction ?? null, now, round.id)
 
-  let nextRoundView = null
+  const batchStatements: D1PreparedStatement[] = [revealStmt]
+
   if (round.round_number >= game.total_rounds) {
-    await db.prepare(`UPDATE draw_games SET status = 'completed' WHERE id = ?`).bind(game.id).run()
+    batchStatements.push(
+      db.prepare(`UPDATE draw_games SET status = 'completed' WHERE id = ?`).bind(game.id),
+    )
   } else {
     const { results: prevWords } = await db
       .prepare('SELECT secret_word FROM draw_rounds WHERE game_id = ? AND secret_word IS NOT NULL')
       .bind(game.id)
       .all<{ secret_word: string }>()
     const used = (prevWords ?? []).map((r) => r.secret_word)
-    const nextPrompts = pickRoundPrompts(used, round.round_number + used.length)
+    const nextDrawerLocale = await inferAgentLocale(db, round.guesser_agent_id)
+    const nextPrompts = pickRoundPrompts(used, round.round_number + used.length, nextDrawerLocale)
     const nextRoundId = randomToken('dr_', 12)
-    await db
-      .prepare(
-        `INSERT INTO draw_rounds (
-           id, game_id, round_number, drawer_agent_id, guesser_agent_id,
-           status, prompt_options_json, created_at
-         ) VALUES (?, ?, ?, ?, ?, 'picking_word', ?, ?)`,
-      )
-      .bind(
-        nextRoundId,
-        game.id,
-        round.round_number + 1,
-        round.guesser_agent_id,
-        round.drawer_agent_id,
-        JSON.stringify(nextPrompts),
-        now,
-      )
-      .run()
-    const nextRow = await db.prepare('SELECT * FROM draw_rounds WHERE id = ?').bind(nextRoundId).first<DrawRoundRow>()
-    nextRoundView = nextRow ? formatDrawRoundView(nextRow, agent.id, origin) : null
+    batchStatements.push(
+      db
+        .prepare(
+          `INSERT INTO draw_rounds (
+             id, game_id, round_number, drawer_agent_id, guesser_agent_id,
+             status, prompt_options_json, created_at
+           ) VALUES (?, ?, ?, ?, ?, 'picking_word', ?, ?)`,
+        )
+        .bind(
+          nextRoundId,
+          game.id,
+          round.round_number + 1,
+          round.guesser_agent_id,
+          round.drawer_agent_id,
+          JSON.stringify(nextPrompts),
+          now,
+        ),
+    )
   }
 
-  return {
-    matched,
-    revealed: true,
-    attempts_remaining: 0,
-    secret_word: round.secret_word,
-    image_url: round.svg_markup ? `${origin.replace(/\/+$/, '')}/img/${round.id}.svg` : null,
-    game_completed: round.round_number >= game.total_rounds,
-    next_round: nextRoundView,
+  try {
+    await db.batch(batchStatements)
+  } catch (err) {
+    const latestAfterErr = await db
+      .prepare('SELECT * FROM draw_rounds WHERE id = ?')
+      .bind(round.id)
+      .first<DrawRoundRow>()
+    if (latestAfterErr && latestAfterErr.status === 'revealed') {
+      return buildRevealedPayload(latestAfterErr)
+    }
+    throw err
   }
+
+  const canonical = await db
+    .prepare('SELECT * FROM draw_rounds WHERE id = ?')
+    .bind(round.id)
+    .first<DrawRoundRow>()
+  if (!canonical) throw new ProtocolError(404, 'Draw round not found')
+  return buildRevealedPayload(canonical)
 }
 
 export async function eraseAgent(db: D1Database, token: string | null | undefined) {

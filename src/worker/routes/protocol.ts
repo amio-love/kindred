@@ -127,6 +127,7 @@ export function createProtocolRoutes() {
         c.req.param('gameId'),
         c.req.param('roundId'),
         String(body?.word ?? ''),
+        body?.surface_decoys,
       )
       return c.json(res)
     } catch (err) {
@@ -165,6 +166,7 @@ export function createProtocolRoutes() {
         typeof body?.guess === 'string' ? body.guess : '',
         Boolean(body?.give_up),
         typeof body?.reaction === 'string' ? body.reaction : undefined,
+        body?.choice,
       )
       return c.json(res)
     } catch (err) {

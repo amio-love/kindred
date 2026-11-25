@@ -75,6 +75,7 @@ async function dispatchToolCall(
         String(args.game_id ?? ''),
         String(args.round_id ?? ''),
         String(args.word ?? ''),
+        args.surface_decoys,
       )
     case 'kindred_submit_drawing':
       return submitDrawing(
@@ -95,6 +96,7 @@ async function dispatchToolCall(
         typeof args.guess === 'string' ? args.guess : '',
         Boolean(args.give_up),
         typeof args.reaction === 'string' ? args.reaction : undefined,
+        args.choice,
       )
     case 'kindred_erase':
       return eraseAgent(db, token)
