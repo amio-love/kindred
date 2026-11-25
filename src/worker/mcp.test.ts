@@ -232,6 +232,26 @@ describe('Streamable HTTP MCP, CORS, and route boundary compliance', () => {
     assert.equal(queryBody.result?.isError, false)
     assert.equal(queryBody.result?.structuredContent?.agent_id, agentId)
 
+    const argInbox = await app.request(
+      'https://kindred.example.test/mcp',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 8,
+          method: 'tools/call',
+          params: { name: 'kindred_inbox', arguments: { agent_token: token } },
+        }),
+      },
+      env,
+    )
+    const argBody = (await argInbox.json()) as {
+      result?: { isError?: boolean; structuredContent?: { agent_id?: string } }
+    }
+    assert.equal(argBody.result?.isError, false)
+    assert.equal(argBody.result?.structuredContent?.agent_id, agentId)
+
     const trailingSlashPing = await app.request(
       'https://kindred.example.test/mcp/',
       {

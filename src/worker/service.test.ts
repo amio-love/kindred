@@ -292,6 +292,13 @@ describe('Phase 1 quiz publishing, screening gates, and double-blind immutabilit
         ]),
       /Duplicate question_id/i,
     )
+    await assert.rejects(
+      () =>
+        submitAgentAnswers(dbCov, covPending.tokenA, covPending.pairingId, [
+          { question_id: covPending.pairB.questions[0]!.id, choice: 'A' },
+        ]),
+      /Invalid question_id/i,
+    )
 
     await submitAgentAnswers(
       dbCov,
@@ -412,6 +419,17 @@ describe('Phase 1 quiz publishing, screening gates, and double-blind immutabilit
           ORIGIN,
           pending.tokenA,
           pending.pairingId,
+          pending.pairB.questions.map((q) => ({ question_id: q.id, choice: 'A' })),
+        ),
+      /must choose A, B, C, or D/i,
+    )
+    await assert.rejects(
+      () =>
+        submitHumanAnswers(
+          db,
+          ORIGIN,
+          pending.tokenA,
+          pending.pairingId,
           mapMatchingAnswers(blindA.partner_questions, pending.qsB).slice(0, 3),
         ),
       /Expected 4 human answers/i,
@@ -522,43 +540,115 @@ describe('Phase 1 quiz publishing, screening gates, and double-blind immutabilit
       .prepare(`UPDATE pairings SET status = 'pending_agents' WHERE id = ?`)
       .bind(p2.pairingId)
       .run()
-    const inboxHealed = await getInbox(dbAgentHeal, ORIGIN, p2.tokenA)
-    assert.equal(inboxHealed.ready_for_human.some((item) => item.pairing_id === p2.pairingId), true)
+    const inboxHealedA = await getInbox(dbAgentHeal, ORIGIN, p2.tokenA)
+    assert.equal(inboxHealedA.ready_for_human.some((item) => item.pairing_id === p2.pairingId), true)
+
+    await dbAgentHeal
+      .prepare(`UPDATE pairings SET status = 'pending_agents' WHERE id = ?`)
+      .bind(p2.pairingId)
+      .run()
+    const inboxHealedB = await getInbox(dbAgentHeal, ORIGIN, p2.tokenB)
+    assert.equal(inboxHealedB.ready_for_human.some((item) => item.pairing_id === p2.pairingId), true)
   })
 
-  test('preserves revealed and unanswered pending pairings under >12 rows and enforces daily pairing cap on both caller and candidate', async () => {
-    const dbCallerCap = createSqliteD1()
-    for (let i = 0; i < 8; i++) {
-      await publishQuiz(dbCallerCap, ORIGIN, null, buildQuestions(`pool-${i}`))
+  test('preserves revealed and unanswered pending pairings under >12 rows and enforces deterministic 24h daily caps on both A/B sides', async () => {
+    const dbCap = createSqliteD1()
+    const seedAgent = async (id: string, rawToken: string) => {
+      const pub = await publishQuiz(dbCap, ORIGIN, null, buildQuestions(`seed-${id}`))
+      await dbCap.prepare('DELETE FROM pairings').run()
+      const now = new Date().toISOString()
+      const encoder = new TextEncoder()
+      const hashBuf = await crypto.subtle.digest('SHA-256', encoder.encode(rawToken))
+      const hashHex = Array.from(new Uint8Array(hashBuf))
+        .map((b) => b.toString(16).padStart(2, '0'))
+        .join('')
+      await dbCap
+        .prepare('INSERT INTO agents (id, token_hash, quiz_ready, created_at, last_seen_at) VALUES (?, ?, 1, ?, ?)')
+        .bind(id, hashHex, now, now)
+        .run()
+      await dbCap.prepare('UPDATE questions SET agent_id = ? WHERE agent_id = ?').bind(id, pub.agent_id).run()
+      await dbCap.prepare('DELETE FROM agents WHERE id = ?').bind(pub.agent_id).run()
     }
-    await dbCallerCap.prepare('DELETE FROM pairings').run()
-    const callerPub = await publishQuiz(dbCallerCap, ORIGIN, null, buildQuestions('caller-new'))
-    const callerCount = await dbCallerCap
+
+    for (let i = 0; i < 6; i++) {
+      await seedAgent(`agt_50${i}_mid`, `knd_mid_${i}`)
+    }
+    await seedAgent('agt_000_low', 'knd_low')
+    await seedAgent('agt_zzz_high', 'knd_high')
+
+    await getInbox(dbCap, ORIGIN, 'knd_low')
+    const lowAfterFirst = await dbCap
       .prepare('SELECT COUNT(*) AS cnt FROM pairings WHERE agent_a_id = ? OR agent_b_id = ?')
-      .bind(callerPub.agent_id, callerPub.agent_id)
+      .bind('agt_000_low', 'agt_000_low')
       .first<{ cnt: number }>()
-    assert.equal(Number(callerCount?.cnt ?? -1), 3)
+    assert.equal(Number(lowAfterFirst?.cnt ?? -1), 3)
+
+    await getInbox(dbCap, ORIGIN, 'knd_low')
+    const lowAfterRepoll = await dbCap
+      .prepare('SELECT COUNT(*) AS cnt FROM pairings WHERE agent_a_id = ? OR agent_b_id = ?')
+      .bind('agt_000_low', 'agt_000_low')
+      .first<{ cnt: number }>()
+    assert.equal(Number(lowAfterRepoll?.cnt ?? -1), 3)
+
+    await dbCap.prepare('DELETE FROM pairings').run()
+    await getInbox(dbCap, ORIGIN, 'knd_high')
+    await getInbox(dbCap, ORIGIN, 'knd_high')
+    const highCount = await dbCap
+      .prepare('SELECT COUNT(*) AS cnt FROM pairings WHERE agent_a_id = ? OR agent_b_id = ?')
+      .bind('agt_zzz_high', 'agt_zzz_high')
+      .first<{ cnt: number }>()
+    assert.equal(Number(highCount?.cnt ?? -1), 3)
+
+    await dbCap.prepare('DELETE FROM pairings').run()
+    await dbCap.prepare(`UPDATE agents SET quiz_ready = 0 WHERE id LIKE 'agt_50%_mid'`).run()
+    const nowIso = new Date().toISOString()
+    for (let i = 0; i < 3; i++) {
+      await dbCap
+        .prepare(`INSERT INTO pairings (id, agent_a_id, agent_b_id, status, created_at) VALUES (?, ?, ?, 'pending_agents', ?)`)
+        .bind(`pr_cand_a_${i}`, 'agt_000_low', `agt_50${i}_mid`, nowIso)
+        .run()
+    }
+    await getInbox(dbCap, ORIGIN, 'knd_high')
+    const lowAfterPassive = await dbCap
+      .prepare('SELECT COUNT(*) AS cnt FROM pairings WHERE agent_a_id = ? OR agent_b_id = ?')
+      .bind('agt_000_low', 'agt_000_low')
+      .first<{ cnt: number }>()
+    assert.equal(Number(lowAfterPassive?.cnt ?? -1), 3)
+
+    await dbCap.prepare('DELETE FROM pairings').run()
+    for (let i = 0; i < 3; i++) {
+      await dbCap
+        .prepare(`INSERT INTO pairings (id, agent_a_id, agent_b_id, status, created_at) VALUES (?, ?, ?, 'pending_agents', ?)`)
+        .bind(`pr_cand_b_${i}`, `agt_50${i}_mid`, 'agt_zzz_high', nowIso)
+        .run()
+    }
+    await getInbox(dbCap, ORIGIN, 'knd_low')
+    const highAfterPassive = await dbCap
+      .prepare('SELECT COUNT(*) AS cnt FROM pairings WHERE agent_a_id = ? OR agent_b_id = ?')
+      .bind('agt_zzz_high', 'agt_zzz_high')
+      .first<{ cnt: number }>()
+    assert.equal(Number(highAfterPassive?.cnt ?? -1), 3)
+
+    const agedIso = new Date(Date.now() - 25 * 3_600_000).toISOString()
+    await dbCap.prepare('UPDATE pairings SET created_at = ?').bind(agedIso).run()
+    await getInbox(dbCap, ORIGIN, 'knd_low')
+    const highAfter25h = await dbCap
+      .prepare('SELECT COUNT(*) AS cnt FROM pairings WHERE agent_a_id = ? OR agent_b_id = ?')
+      .bind('agt_zzz_high', 'agt_zzz_high')
+      .first<{ cnt: number }>()
+    assert.equal(Number(highAfter25h?.cnt ?? -1), 4)
 
     const db = createSqliteD1()
     const { tokenA, pairingId } = await setupRevealedPairing(db)
     const inboxInit = await getInbox(db, ORIGIN, tokenA)
     const agentAId = inboxInit.agent_id
 
-    for (let i = 0; i < 13; i++) {
-      await publishQuiz(db, ORIGIN, null, buildQuestions(`spam-${i}`))
-    }
-
-    const totalForA = await db
-      .prepare(`SELECT COUNT(*) AS cnt FROM pairings WHERE agent_a_id = ? OR agent_b_id = ?`)
-      .bind(agentAId, agentAId)
-      .first<{ cnt: number }>()
-    assert.ok(Number(totalForA?.cnt ?? 99) <= 3, `Expected passive cap <= 3, got ${totalForA?.cnt}`)
-
     const extraAgents: string[] = []
     for (let i = 0; i < 28; i++) {
       const p = await publishQuiz(db, ORIGIN, null, buildQuestions(`flood-${i}`))
       extraAgents.push(p.agent_id)
     }
+    await db.prepare('DELETE FROM pairings WHERE id != ?').bind(pairingId).run()
     const baseMs = Date.now()
     for (let i = 0; i < 14; i++) {
       await db
@@ -666,6 +756,10 @@ describe('Phase 1 quiz publishing, screening gates, and double-blind immutabilit
     const erased = await eraseAgent(db, tokenA)
     assert.equal(erased.erased, true)
     await assert.rejects(() => getInbox(db, ORIGIN, tokenA), /Invalid or missing agent_token/i)
+    const survivingB = await getInbox(db, ORIGIN, tokenB)
+    assert.ok(survivingB.agent_id)
+    const survivingC = await getInbox(db, ORIGIN, pubC.agent_token)
+    assert.equal(survivingC.agent_id, pubC.agent_id)
     const remainingPairings = await db.prepare('SELECT COUNT(*) AS cnt FROM pairings WHERE id = ?').bind(pairingId).first<{ cnt: number }>()
     assert.equal(Number(remainingPairings?.cnt ?? -1), 0)
   })

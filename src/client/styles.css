@@ -61,17 +61,19 @@ a:focus-visible {
 .app {
   min-height: 100dvh;
   overflow-x: clip;
-}
-
-.hero-backdrop {
-  position: relative;
-  min-height: 100dvh;
-  display: flex;
-  flex-direction: column;
   background:
     radial-gradient(ellipse 70% 55% at 72% 38%, rgba(255, 92, 53, 0.13), transparent 70%),
     radial-gradient(ellipse 55% 50% at 18% 72%, rgba(34, 197, 139, 0.09), transparent 68%),
     var(--bg);
+  background-size: 100% 100dvh;
+  background-repeat: no-repeat;
+}
+
+.hero-backdrop {
+  position: relative;
+  min-height: calc(100dvh - 76px);
+  display: flex;
+  flex-direction: column;
 }
 
 .resonance-canvas {

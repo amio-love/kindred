@@ -56,7 +56,7 @@ export const KINDRED_TOOLS: readonly KindredToolDescriptor[] = [
     title: 'Poll Kindred Inbox',
     description:
       'Fetch pending paired quizzes for background agent screening, pairings ready for double-blind human answers, revealed Triple Chemistry reports, and active Subtext Draw rounds.',
-    readOnlyHint: true,
+    readOnlyHint: false,
     inputSchema: {
       type: 'object',
       properties: {
@@ -121,7 +121,7 @@ export const KINDRED_TOOLS: readonly KindredToolDescriptor[] = [
     title: 'Get Pairing Reveal',
     description:
       'Retrieve double-blind questions (if unsubmitted), waiting status with Own-Agent sync, or full Triple Chemistry Reveal and anchor notes.',
-    readOnlyHint: true,
+    readOnlyHint: false,
     inputSchema: {
       type: 'object',
       properties: {

@@ -67,95 +67,101 @@ export default function App() {
 
   return (
     <div className="app">
-      <div className="hero-backdrop">
-        <ResonanceCanvas resonanceBoost={resonanceBoost} />
-        <div className="container">
-          <header className="topbar">
-            <a href="/" className="brand" aria-label="Kindred">
-              <span className="brand-mark" aria-hidden="true">
-                <span className="brand-dot brand-dot--a" />
-                <span className="brand-dot brand-dot--b" />
-              </span>
-              <span className="brand-name">Kindred</span>
-            </a>
+      <div className="container">
+        <header className="topbar">
+          <a href="/" className="brand" aria-label="Kindred">
+            <span className="brand-mark" aria-hidden="true">
+              <span className="brand-dot brand-dot--a" />
+              <span className="brand-dot brand-dot--b" />
+            </span>
+            <span className="brand-name">Kindred</span>
+          </a>
 
-            <div className="topbar-right">
-              <nav className="topbar-links" aria-label="Links">
-                <a href="/skill.md" className="top-link">
-                  {copy.protocolLink}
-                </a>
-                <a
-                  href="https://github.com/amio-love/kindred"
-                  target="_blank"
-                  rel="noreferrer"
-                  className="top-link"
-                >
-                  GitHub
-                </a>
-              </nav>
+          <div className="topbar-right">
+            <nav className="topbar-links" aria-label="Links">
+              <a href="/skill.md" className="top-link">
+                {copy.protocolLink}
+              </a>
+              <a
+                href="https://github.com/amio-love/kindred"
+                target="_blank"
+                rel="noreferrer"
+                className="top-link"
+              >
+                GitHub
+              </a>
+            </nav>
 
-              <div className="lang-switch" role="group" aria-label="Language">
-                <button
-                  type="button"
-                  className={`lang-btn ${locale === 'zh' ? 'lang-btn--active' : ''}`}
-                  aria-pressed={locale === 'zh'}
-                  onClick={() => setLocale('zh')}
-                >
-                  中
-                </button>
-                <button
-                  type="button"
-                  className={`lang-btn ${locale === 'en' ? 'lang-btn--active' : ''}`}
-                  aria-pressed={locale === 'en'}
-                  onClick={() => setLocale('en')}
-                >
-                  EN
-                </button>
-              </div>
+            <div className="lang-switch" role="group" aria-label="Language">
+              <button
+                type="button"
+                className={`lang-btn ${locale === 'zh' ? 'lang-btn--active' : ''}`}
+                aria-pressed={locale === 'zh'}
+                onClick={() => setLocale('zh')}
+              >
+                中
+              </button>
+              <button
+                type="button"
+                className={`lang-btn ${locale === 'en' ? 'lang-btn--active' : ''}`}
+                aria-pressed={locale === 'en'}
+                onClick={() => setLocale('en')}
+              >
+                EN
+              </button>
             </div>
-          </header>
-
-          <main className="hero-grid">
-            <section className="hero-copy">
-              <span className="eyebrow">{copy.eyebrow}</span>
-              <h1 className={locale === 'en' ? 'h1-en' : 'h1-zh'}>{copy.headline}</h1>
-              <p className="hero-sub">{copy.subtitle}</p>
-
-              <div className="command-bar">
-                <code className="command-code">{promptText}</code>
-                <button
-                  type="button"
-                  className={`cta-btn ${copied ? 'cta-btn--copied' : ''}`}
-                  onClick={handleCopy}
-                >
-                  {copied ? copy.copiedButton : copy.copyButton}
-                </button>
-              </div>
-
-              <HostShowcase
-                locale={locale}
-                label={copy.worksWith}
-                moreBadge={copy.moreHostsBadge}
-                openProtocolNote={copy.openProtocolNote}
-              />
-
-              <ul className="trust-row">
-                {copy.trustItems.map((item) => (
-                  <li key={item}>{item}</li>
-                ))}
-              </ul>
-            </section>
-
-            <section className="hero-stage" aria-label={copy.stageHeader}>
-              <HeroVideo locale={locale} copy={copy} onResonanceBoost={setResonanceBoost} />
-            </section>
-          </main>
-        </div>
+          </div>
+        </header>
       </div>
 
-      <div className="container">
-        <VisualStory copy={copy} copied={copied} onCopy={handleCopy} />
+      <main>
+        <div className="hero-backdrop">
+          <ResonanceCanvas resonanceBoost={resonanceBoost} />
+          <div className="container">
+            <div className="hero-grid">
+              <section className="hero-copy">
+                <span className="eyebrow">{copy.eyebrow}</span>
+                <h1 className={locale === 'en' ? 'h1-en' : 'h1-zh'}>{copy.headline}</h1>
+                <p className="hero-sub">{copy.subtitle}</p>
 
+                <div className="command-bar">
+                  <code className="command-code">{promptText}</code>
+                  <button
+                    type="button"
+                    className={`cta-btn ${copied ? 'cta-btn--copied' : ''}`}
+                    onClick={handleCopy}
+                  >
+                    {copied ? copy.copiedButton : copy.copyButton}
+                  </button>
+                </div>
+
+                <HostShowcase
+                  locale={locale}
+                  label={copy.worksWith}
+                  moreBadge={copy.moreHostsBadge}
+                  openProtocolNote={copy.openProtocolNote}
+                />
+
+                <ul className="trust-row">
+                  {copy.trustItems.map((item) => (
+                    <li key={item}>{item}</li>
+                  ))}
+                </ul>
+              </section>
+
+              <section className="hero-stage" aria-label={copy.stageHeader}>
+                <HeroVideo locale={locale} copy={copy} onResonanceBoost={setResonanceBoost} />
+              </section>
+            </div>
+          </div>
+        </div>
+
+        <div className="container">
+          <VisualStory copy={copy} copied={copied} onCopy={handleCopy} />
+        </div>
+      </main>
+
+      <div className="container">
         <footer className="site-footer">
           <span className="footer-brand">Kindred</span>
           <div className="footer-links">
