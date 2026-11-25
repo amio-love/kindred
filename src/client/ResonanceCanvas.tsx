@@ -26,14 +26,26 @@ export default function ResonanceCanvas({ resonanceBoost }: ResonanceCanvasProps
     let mouseX = 0.5
     let mouseY = 0.45
 
+    let lastDpr = 0
+
     const resize = () => {
       const rect = canvas.getBoundingClientRect()
+      if (rect.width <= 0 || rect.height <= 0) return false
       const dpr = Math.min(window.devicePixelRatio || 1, 2)
+      if (
+        Math.abs(rect.width - width) < 0.5 &&
+        Math.abs(rect.height - height) < 0.5 &&
+        dpr === lastDpr
+      ) {
+        return false
+      }
       width = rect.width
       height = rect.height
+      lastDpr = dpr
       canvas.width = Math.max(1, Math.floor(width * dpr))
       canvas.height = Math.max(1, Math.floor(height * dpr))
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+      return true
     }
 
     const onPointerMove = (e: PointerEvent) => {
@@ -86,6 +98,14 @@ export default function ResonanceCanvas({ resonanceBoost }: ResonanceCanvasProps
       rafId = 0
       if (!running && !reducedMotion) return
 
+      resize()
+      if (width <= 0 || height <= 0) {
+        if (!reducedMotion && running) {
+          rafId = window.requestAnimationFrame(draw)
+        }
+        return
+      }
+
       mouseX += (targetMouseX - mouseX) * 0.04
       mouseY += (targetMouseY - mouseY) * 0.04
       phase += 0.0085 + boostRef.current * 0.004
@@ -125,8 +145,22 @@ export default function ResonanceCanvas({ resonanceBoost }: ResonanceCanvasProps
       }
     }
 
+    const handleResize = () => {
+      if (resize() && reducedMotion) {
+        draw()
+      }
+    }
+
+    const resizeObserver =
+      typeof ResizeObserver !== 'undefined'
+        ? new ResizeObserver(() => {
+            handleResize()
+          })
+        : null
+    resizeObserver?.observe(canvas)
+
     resize()
-    window.addEventListener('resize', resize)
+    window.addEventListener('resize', handleResize)
     window.addEventListener('pointermove', onPointerMove, { passive: true })
 
     if (reducedMotion) {
@@ -140,7 +174,8 @@ export default function ResonanceCanvas({ resonanceBoost }: ResonanceCanvasProps
       running = false
       if (rafId) window.cancelAnimationFrame(rafId)
       observer.disconnect()
-      window.removeEventListener('resize', resize)
+      resizeObserver?.disconnect()
+      window.removeEventListener('resize', handleResize)
       window.removeEventListener('pointermove', onPointerMove)
     }
   }, [])

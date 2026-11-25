@@ -62,8 +62,8 @@ a:focus-visible {
   min-height: 100dvh;
   overflow-x: clip;
   background:
-    radial-gradient(ellipse 70% 55% at 72% 38%, rgba(255, 92, 53, 0.13), transparent 70%),
-    radial-gradient(ellipse 55% 50% at 18% 72%, rgba(34, 197, 139, 0.09), transparent 68%),
+    radial-gradient(ellipse 68% 46% at 72% 36%, rgba(255, 92, 53, 0.13), transparent 68%),
+    radial-gradient(ellipse 52% 34% at 18% 60%, rgba(34, 197, 139, 0.09), transparent 68%),
     var(--bg);
   background-size: 100% 100dvh;
   background-repeat: no-repeat;

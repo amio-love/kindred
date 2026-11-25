@@ -243,9 +243,11 @@ describe('Phase 1 quiz publishing, screening gates, and double-blind immutabilit
     piiDim[0]!.dimension = '@kindred_99'
     await assert.rejects(() => publishQuiz(db, ORIGIN, null, piiDim), /PII/i)
 
-    const piiOptD = buildQuestions('piioptd', 'en')
-    piiOptD[0]!.options.D = 'find me on X: alice_99'
-    await assert.rejects(() => publishQuiz(db, ORIGIN, null, piiOptD), /PII/i)
+    for (const key of ['A', 'B', 'C', 'D'] as const) {
+      const piiOpt = buildQuestions(`piiopt-${key}`, 'en')
+      piiOpt[0]!.options[key] = 'find me on X: alice_99'
+      await assert.rejects(() => publishQuiz(db, ORIGIN, null, piiOpt), /PII/i)
+    }
 
     const dupOptQuiz = buildQuestions('dup')
     dupOptQuiz[0]!.options.B = dupOptQuiz[0]!.options.A
@@ -549,6 +551,24 @@ describe('Phase 1 quiz publishing, screening gates, and double-blind immutabilit
       .run()
     const inboxHealedB = await getInbox(dbAgentHeal, ORIGIN, p2.tokenB)
     assert.equal(inboxHealedB.ready_for_human.some((item) => item.pairing_id === p2.pairingId), true)
+
+    const dbRejectHeal = createSqliteD1()
+    const pFail = await setupPendingPairing(dbRejectHeal)
+    const wrongA = pFail.pairA.questions.map((q) => ({ question_id: q.id, choice: 'U' as const }))
+    const wrongB = pFail.pairB.questions.map((q) => ({ question_id: q.id, choice: 'U' as const }))
+    await submitAgentAnswers(dbRejectHeal, pFail.tokenA, pFail.pairingId, wrongA)
+    await submitAgentAnswers(dbRejectHeal, pFail.tokenB, pFail.pairingId, wrongB)
+    await dbRejectHeal
+      .prepare(`UPDATE pairings SET status = 'pending_agents' WHERE id = ?`)
+      .bind(pFail.pairingId)
+      .run()
+    const inboxRejectHeal = await getInbox(dbRejectHeal, ORIGIN, pFail.tokenA)
+    assert.equal(inboxRejectHeal.ready_for_human.some((item) => item.pairing_id === pFail.pairingId), false)
+    const healedRow = await dbRejectHeal
+      .prepare('SELECT status FROM pairings WHERE id = ?')
+      .bind(pFail.pairingId)
+      .first<{ status: string }>()
+    assert.equal(healedRow?.status, 'rejected')
   })
 
   test('preserves revealed and unanswered pending pairings under >12 rows and enforces deterministic 24h daily caps on both A/B sides', async () => {
@@ -590,6 +610,24 @@ describe('Phase 1 quiz publishing, screening gates, and double-blind immutabilit
       .first<{ cnt: number }>()
     assert.equal(Number(lowAfterRepoll?.cnt ?? -1), 3)
 
+    const aged23h = new Date(Date.now() - 23 * 3_600_000).toISOString()
+    await dbCap.prepare('UPDATE pairings SET created_at = ?').bind(aged23h).run()
+    await getInbox(dbCap, ORIGIN, 'knd_low')
+    const lowAfter23h = await dbCap
+      .prepare('SELECT COUNT(*) AS cnt FROM pairings WHERE agent_a_id = ? OR agent_b_id = ?')
+      .bind('agt_000_low', 'agt_000_low')
+      .first<{ cnt: number }>()
+    assert.equal(Number(lowAfter23h?.cnt ?? -1), 3)
+
+    const agedCaller25h = new Date(Date.now() - 25 * 3_600_000).toISOString()
+    await dbCap.prepare('UPDATE pairings SET created_at = ?').bind(agedCaller25h).run()
+    await getInbox(dbCap, ORIGIN, 'knd_low')
+    const lowAfter25h = await dbCap
+      .prepare('SELECT COUNT(*) AS cnt FROM pairings WHERE agent_a_id = ? OR agent_b_id = ?')
+      .bind('agt_000_low', 'agt_000_low')
+      .first<{ cnt: number }>()
+    assert.equal(Number(lowAfter25h?.cnt ?? -1), 6)
+
     await dbCap.prepare('DELETE FROM pairings').run()
     await getInbox(dbCap, ORIGIN, 'knd_high')
     await getInbox(dbCap, ORIGIN, 'knd_high')
@@ -602,6 +640,20 @@ describe('Phase 1 quiz publishing, screening gates, and double-blind immutabilit
     await dbCap.prepare('DELETE FROM pairings').run()
     await dbCap.prepare(`UPDATE agents SET quiz_ready = 0 WHERE id LIKE 'agt_50%_mid'`).run()
     const nowIso = new Date().toISOString()
+    for (let i = 0; i < 2; i++) {
+      await dbCap
+        .prepare(`INSERT INTO pairings (id, agent_a_id, agent_b_id, status, created_at) VALUES (?, ?, ?, 'pending_agents', ?)`)
+        .bind(`pr_cand_allow3_${i}`, 'agt_000_low', `agt_50${i}_mid`, nowIso)
+        .run()
+    }
+    await getInbox(dbCap, ORIGIN, 'knd_high')
+    const lowAtThird = await dbCap
+      .prepare('SELECT COUNT(*) AS cnt FROM pairings WHERE agent_a_id = ? OR agent_b_id = ?')
+      .bind('agt_000_low', 'agt_000_low')
+      .first<{ cnt: number }>()
+    assert.equal(Number(lowAtThird?.cnt ?? -1), 3)
+
+    await dbCap.prepare('DELETE FROM pairings').run()
     for (let i = 0; i < 3; i++) {
       await dbCap
         .prepare(`INSERT INTO pairings (id, agent_a_id, agent_b_id, status, created_at) VALUES (?, ?, ?, 'pending_agents', ?)`)

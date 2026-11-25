@@ -252,6 +252,45 @@ describe('Streamable HTTP MCP, CORS, and route boundary compliance', () => {
     assert.equal(argBody.result?.isError, false)
     assert.equal(argBody.result?.structuredContent?.agent_id, agentId)
 
+    const argOverridesBadHeader = await app.request(
+      'https://kindred.example.test/mcp',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer knd_invalid_header' },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 9,
+          method: 'tools/call',
+          params: { name: 'kindred_inbox', arguments: { agent_token: token } },
+        }),
+      },
+      env,
+    )
+    const argWinBody = (await argOverridesBadHeader.json()) as {
+      result?: { isError?: boolean; structuredContent?: { agent_id?: string } }
+    }
+    assert.equal(argWinBody.result?.isError, false)
+    assert.equal(argWinBody.result?.structuredContent?.agent_id, agentId)
+
+    const badArgOverridesValidHeader = await app.request(
+      'https://kindred.example.test/mcp',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 10,
+          method: 'tools/call',
+          params: { name: 'kindred_inbox', arguments: { agent_token: 'knd_invalid_arg' } },
+        }),
+      },
+      env,
+    )
+    const badArgBody = (await badArgOverridesValidHeader.json()) as {
+      result?: { isError?: boolean }
+    }
+    assert.equal(badArgBody.result?.isError, true)
+
     const trailingSlashPing = await app.request(
       'https://kindred.example.test/mcp/',
       {
