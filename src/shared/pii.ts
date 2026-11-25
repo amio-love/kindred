@@ -215,10 +215,13 @@ const STRONG_HANDLE_CUES: readonly RegExp[] = [
 
 const BARE_CN_CONTENT_CUE_RE = new RegExp(`(?:${CN_CONTENT_PLATS})\\s*(?:是|为|叫|[:：=])\\s*${WRAP}$`, 'i')
 const CN_CONTACT_SOLICIT_RE =
-  /^(?:欢迎|可以|直接|随时|请|来)?(?:互关|互粉|回关|求关注|关注我|私信我?|私聊我?|找我(?:聊|玩)?|加我(?:聊|玩)?|滴滴我?|和我聊聊?|联系我|搜我|是我的号|是我号)[吧呀啊哦哈啦~！!。]*$/
+  /^(?:(?:欢迎|可以|直接|随时|请|来)(?:互关|互粉|回关|求关注|关注我|私信|私聊|找我|加我|滴滴|和我聊|联系我|搜我)|(?:互关|互粉|回关|求关注|关注我|私信我|私聊我|私信聊|私聊聊|找我|加我|滴滴我?|联系我|搜我|是我的号|是我号)|(?:私信|私聊|和我聊聊?)[吧呀啊哦哈啦~！!。]*$)/
 
 function isBareContentHandleClause(after: string): boolean {
-  const clause = (after.split(/(?<!\d)\.(?!\d)|[。!！?？;；]/, 1)[0] ?? '').trim()
+  const clause = (
+    after.split(/(?<!\d)\.(?=\s|$)|!(?=\s|$)|[。！？；]|(?<=[\u4e00-\u9fff])\?(?=\s|$)|\?$/, 1)[0] ??
+    ''
+  ).trim()
   const stripped = clause.replace(/^[^A-Za-z0-9\u4e00-\u9fff]+/, '').trim()
   if (!stripped) return true
   return CN_CONTACT_SOLICIT_RE.test(stripped)
