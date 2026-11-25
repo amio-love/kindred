@@ -24,6 +24,7 @@ describe('PII boundary scanner', () => {
       '电话 +8613800138000',
       '电话 138\u200b0013\u200b8000',
       '座机 010-88886666',
+      '座机 010 88886666',
       '手机 １３８００１３８０００',
       'whatsapp +447911123456',
       'call +1 415-555-0199',
@@ -34,9 +35,12 @@ describe('PII boundary scanner', () => {
       '主页 https://example.org/me',
       '看看我的站点 kindred.dev/profile',
       'visit www.foo.club',
+      'link linktr.ee/alicewonder',
+      'short bit.ly/3abcXYZ',
       '频道 t.me/alice/',
       '身份证 110101199001011234',
       '加我微信：my_handle_99',
+      '我的微信是alicewonder',
       '我的微信号是kindred_99',
       '加微信号:kindred_99',
       '加微信 kindred_99',
@@ -50,6 +54,8 @@ describe('PII boundary scanner', () => {
       'wx kindred_99',
       'my telegram is alice_99',
       'my ig is alice_99',
+      'my facebook is alice.wonder',
+      'find me on telegram as alice_99',
       'insta: alice_99',
       'telegram: alicewonder',
       'Discord alice#1234',
@@ -57,6 +63,7 @@ describe('PII boundary scanner', () => {
       'line id alice_99',
       '小红书: kind_99',
       'QQ 123456789',
+      'QQ群 123456789',
       'find me @kindred_qa_99',
       'tg: @kindred_bot',
       'ins: quiet_reader',
@@ -72,14 +79,21 @@ describe('PII boundary scanner', () => {
       '睡前刷小红书看露营攻略，但从不发帖。',
       '睡前会刷小红书 vlog 吗？',
       '小红书：ootd 穿搭灵感',
+      '小红书：citywalk 路线',
       '周末拍一条抖音vlog记录城市散步。',
       '喜欢看抖音 1080p 航拍视频。',
+      '抖音 Top100 歌单单曲循环。',
+      '豆瓣Top250 里最常重看的一部电影。',
+      '微博：Taylor Swift 热搜讨论。',
       '微信2024年度报告里全是深夜群聊。',
       '微信 2024年度报告里全是深夜群聊。',
       '每天微信 10000 步打卡。',
       'Do you miss Twitter 2012 vibes?',
       'Twitter 280 characters limit felt crisp.',
       'Instagram: never',
+      'Instagram: scrolling before bed',
+      'My Instagram is mostly cats.',
+      'my wechat is full of work groups',
       'Is your Instagram account private?',
       'Do you have a Discord account yet?',
       'Do you love xhs recipes?',
@@ -134,6 +148,22 @@ describe('Option shuffling and paired matching gate', () => {
       { questionId: 'q_5', choice: 'U' },
       { questionId: 'q_6', choice: 'U' },
     ])
+    const lowCoverage = evaluateDirection(questions, [
+      { questionId: 'q_1', choice: 'A' },
+      { questionId: 'q_2', choice: 'A' },
+      { questionId: 'q_3', choice: 'U' },
+      { questionId: 'q_4', choice: 'U' },
+      { questionId: 'q_5', choice: 'U' },
+      { questionId: 'q_6', choice: 'U' },
+    ])
+    const lowHitRate = evaluateDirection(questions, [
+      { questionId: 'q_1', choice: 'A' },
+      { questionId: 'q_2', choice: 'A' },
+      { questionId: 'q_3', choice: 'B' },
+      { questionId: 'q_4', choice: 'B' },
+      { questionId: 'q_5', choice: 'U' },
+      { questionId: 'q_6', choice: 'U' },
+    ])
     const goodPartner = evaluateDirection(questions, [
       { questionId: 'q_1', choice: 'A' },
       { questionId: 'q_2', choice: 'A' },
@@ -145,6 +175,12 @@ describe('Option shuffling and paired matching gate', () => {
 
     assert.equal(highAbstain.hitRate, 1)
     assert.equal(passesAgentMatchGate(highAbstain, goodPartner), false)
+    assert.equal(lowCoverage.answered, 2)
+    assert.equal(lowCoverage.hitRate, 1)
+    assert.equal(passesAgentMatchGate(lowCoverage, goodPartner), false)
+    assert.equal(lowHitRate.coverage >= 0.5, true)
+    assert.equal(lowHitRate.hitRate, 0.5)
+    assert.equal(passesAgentMatchGate(lowHitRate, goodPartner), false)
     assert.equal(passesAgentMatchGate(goodPartner, goodPartner), true)
   })
 
@@ -207,6 +243,7 @@ describe('Option shuffling and paired matching gate', () => {
     assert.equal(report.mismatches[0]?.questionId, 'q_1')
     assert.ok(report.calibrationNote?.includes('便利店'))
     assert.ok(report.calibrationNote?.includes('主人的真实选择'))
+    assert.equal(report.calibrationNote?.includes('与你的真实选择'), false)
 
     const enQuestions: StoredQuestion[] = [
       {

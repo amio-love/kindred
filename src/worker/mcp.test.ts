@@ -215,7 +215,7 @@ describe('Streamable HTTP MCP, CORS, and route boundary compliance', () => {
     assert.equal(ok.status, 200)
     assert.match(ok.headers.get('Content-Type') ?? '', /text\/markdown/)
 
-    for (const badPath of ['/skill.md%EF%BC%8C%E7%84%B6%E5%90%8E', '/api/none', '/mcp/extra']) {
+    for (const badPath of ['/skill.md%EF%BC%8C%E7%84%B6%E5%90%8E', '/api', '/api/none', '/mcp/extra']) {
       const res = await app.request(`https://kindred.example.test${badPath}`, { method: 'GET' }, env)
       assert.equal(res.status, 404, `Expected 404 on ${badPath}, got ${res.status}`)
     }

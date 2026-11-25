@@ -74,45 +74,82 @@ const NON_HANDLE_WORDS = new Set([
   'cool',
   'weak',
   'strong',
+  'mostly',
+  'full',
+  'empty',
+  'quiet',
+  'noisy',
+  'busy',
+  'dead',
+  'clean',
+  'messy',
+  'scroll',
+  'scrolling',
+  'citywalk',
+  'playlist',
+  'playlists',
+  'podcast',
+  'podcasts',
 ])
 
 const FOUR_DIGIT_YEAR_RE = /^(?:19|20)\d{2}$/
 const RESOLUTION_RE = /^\d{3,4}[pPkK]$/
+const RANKING_RE = /^top\d{1,4}$/i
 const PURE_DIGITS_RE = /^\d+$/
 
 function hasDistinctiveHandleShape(cleaned: string): boolean {
   if (RESOLUTION_RE.test(cleaned)) return false
+  if (RANKING_RE.test(cleaned)) return false
   if (PURE_DIGITS_RE.test(cleaned)) return false
   if (/[_.]/.test(cleaned)) return true
   return /[A-Za-z]/.test(cleaned) && /\d/.test(cleaned)
 }
 
+function isFollowedByProse(text: string, matchEnd: number): boolean {
+  const rest = text.slice(matchEnd)
+  return /^[ \t]+[A-Za-z]{2,}\b/.test(rest)
+}
+
+function isFollowedByTopicWord(text: string, matchEnd: number): boolean {
+  const rest = text.slice(matchEnd)
+  return /^[ \t]+(?:[A-Za-z]{2,}\b|路线|攻略|热搜|歌单|穿搭|教程|测评|清单|合集|推荐|日常|打卡|视频|直播|笔记|影评|书单)/.test(rest)
+}
+
 function isRealHandleCandidate(
   token: string,
   mode: 'explicit_cue' | 'colon_platform' | 'bare_space',
+  followedByProse: boolean,
+  followedByTopic: boolean,
 ): boolean {
   const trimmed = token.replace(/[.-]+$/, '')
   const cleaned = trimmed.replace(/^@/, '')
   if (cleaned.length < 3) return false
   if (FOUR_DIGIT_YEAR_RE.test(cleaned)) return false
   if (RESOLUTION_RE.test(cleaned)) return false
+  if (RANKING_RE.test(cleaned)) return false
   if (trimmed.startsWith('@')) return true
   if (NON_HANDLE_WORDS.has(cleaned.toLowerCase())) return false
 
+  const distinctive = hasDistinctiveHandleShape(cleaned)
+
   if (mode === 'bare_space') {
-    return hasDistinctiveHandleShape(cleaned)
+    return distinctive
   }
 
   if (mode === 'colon_platform') {
     if (PURE_DIGITS_RE.test(cleaned)) {
       return cleaned.length >= 6
     }
-    return hasDistinctiveHandleShape(cleaned) || cleaned.length >= 5
+    if (distinctive) return true
+    if (followedByProse || followedByTopic) return false
+    return cleaned.length >= 6
   }
 
   if (PURE_DIGITS_RE.test(cleaned)) {
     return cleaned.length >= 5
   }
+  if (distinctive) return true
+  if (followedByProse) return false
   return true
 }
 
@@ -122,6 +159,10 @@ const DIRECT_PATTERNS: ReadonlyArray<{ category: PiiFinding['category']; pattern
   {
     category: 'url',
     pattern: /\bwww\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z]{2,24})+(?:\/[^\s]*)?/gi,
+  },
+  {
+    category: 'url',
+    pattern: /\b[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.[a-z]{2,12}\/[A-Za-z0-9._~:/?#[\]@!$&'()*+,;=%-]+/gi,
   },
   {
     category: 'china_id',
@@ -137,7 +178,7 @@ const DIRECT_PATTERNS: ReadonlyArray<{ category: PiiFinding['category']; pattern
   },
   {
     category: 'phone',
-    pattern: /(?<!\d)(?:\(0(?:10|2\d|[3-9]\d{2})\)\s*|0(?:10|2\d|[3-9]\d{2})-)[2-9]\d{6,7}(?!\d)/g,
+    pattern: /(?<!\d)(?:\(0(?:10|2\d|[3-9]\d{2})\)\s*|0(?:10|2\d|[3-9]\d{2})[\s-])[2-9]\d{6,7}(?!\d)/g,
   },
   {
     category: 'phone',
@@ -157,7 +198,7 @@ const DIRECT_PATTERNS: ReadonlyArray<{ category: PiiFinding['category']; pattern
   },
   {
     category: 'social_handle',
-    pattern: /(?:\bqq|扣扣)\s*(?:(?:账|帐)?号|ID)?\s*(?:是|为)?\s*[:：=]?\s*[1-9]\d{4,11}\b/gi,
+    pattern: /(?:\bqq|扣扣)\s*(?:群|(?:账|帐)?号|ID)?\s*(?:是|为)?\s*[:：=]?\s*[1-9]\d{4,11}\b/gi,
   },
 ]
 
@@ -166,10 +207,10 @@ const SPACED_NANP_RE = /(?<!\d)([2-9]\d{2})\s+([2-9]\d{2})\s+(\d{4})(?!\d)/g
 const BARE_URL_RE =
   /\b[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.(?:com|cn|net|org|io|dev|app|ai|me|co|gg|tv|cc|xyz|site|link|live|im|uk|jp|de|fr|edu|gov|club|top|vip|shop|fun|tech|online|blog|page|bio|social|chat|work|studio|design|space|cloud|world|pro|info|biz)(?:\/[^\s]*|\b)/gi
 
-const CN_PLATS = '(?:微信|小红书|抖音|快手|微博|企鹅|B站|b站|哔哩哔哩|知乎|豆瓣|贴吧)'
+const CN_PLATS = '(?:微信|小红书|抖音|快手|微博|企鹅|B站|b站|哔哩哔哩|知乎|豆瓣|贴吧|咸鱼|闲鱼)'
 
 const EXPLICIT_CN_HANDLE_RE = new RegExp(
-  `(?:(?:加\\s*(?:我\\s*|个\\s*|一下\\s*)?(?:[vV微]|${CN_PLATS})\\s*(?:吧|呀|哈|聊)?)|(?:${CN_PLATS}\\s*(?:(?:账|帐)?号|ID|名)))\\s*(?:是|为)?\\s*(?:[:：=]\\s*|\\s+|(?=[@A-Za-z0-9_.-]))(@?[A-Za-z0-9_.-]{4,})`,
+  `(?:(?:加\\s*(?:我\\s*|个\\s*|一下\\s*)?(?:[vV微]|${CN_PLATS})\\s*(?:吧|呀|哈|聊)?)|(?:(?:我的|本人)\\s*${CN_PLATS}\\s*(?:(?:账|帐)?号|ID|名)?\\s*(?:是|为))|(?:${CN_PLATS}\\s*(?:(?:账|帐)?号|ID|名)\\s*(?:是|为)?))\\s*(?:[:：=]\\s*|\\s+|(?=[@A-Za-z0-9_.-]))(@?[A-Za-z0-9_.-]{4,})`,
   'gi',
 )
 
@@ -183,15 +224,18 @@ const BARE_CN_HANDLE_RE = new RegExp(
   'gi',
 )
 
-const EN_SHORT_PLATS = '(?:wx|vx|weixin|xhs|tg)'
+const EN_SHORT_PLATS = '(?:wx|vx|weixin|xhs|tg|fb)'
 const EN_FULL_PLATS =
-  '(?:wechat|telegram|ins|ig|insta|instagram|twitter|discord|whatsapp|snapchat|tiktok|github|reddit)'
+  '(?:wechat|telegram|ins|ig|insta|instagram|twitter|discord|whatsapp|snapchat|tiktok|github|reddit|facebook|linkedin|threads|bluesky|mastodon|skype|kakao|viber|messenger|youtube|twitch|steam|psn|xbox)'
 const EN_AMBIG_PLATS = '(?:line|signal)'
 
 const EXPLICIT_EN_ASSIGN_RE = new RegExp(
-  `\\b(?:my\\s+(?:${EN_SHORT_PLATS}|${EN_FULL_PLATS}|${EN_AMBIG_PLATS})(?:\\s+(?:id|handle|account))?\\s+(?:is\\s+|[:：=]\\s*)|(?:${EN_SHORT_PLATS}|${EN_FULL_PLATS}|${EN_AMBIG_PLATS})\\s+(?:id|handle|account)\\s*(?:is\\s+|[:：=]\\s*))(@?[A-Za-z0-9_.-]{3,})`,
+  `\\b(?:my\\s+(?:${EN_SHORT_PLATS}|${EN_FULL_PLATS}|${EN_AMBIG_PLATS}|handle|username)(?:\\s+(?:id|handle|account|username))?\\s+(?:is\\s+|[:：=]\\s*)|(?:${EN_SHORT_PLATS}|${EN_FULL_PLATS}|${EN_AMBIG_PLATS})\\s+(?:id|handle|account|username)\\s*(?:is\\s+|[:：=]\\s*))(@?[A-Za-z0-9_.-]{3,})`,
   'gi',
 )
+
+const EN_CONTACT_INVITE_RE =
+  /\b(?:find|add|dm|message|reach|contact|follow|text)\s+me\s+(?:on\s+[A-Za-z0-9_.-]+\s+)?(?:as|at|on|:)\s*(@?[A-Za-z0-9_.-]{3,})/gi
 
 const EN_SHORT_COLON_OR_SPACE_RE = new RegExp(
   `\\b${EN_SHORT_PLATS}\\b\\s*(?:([:：=])\\s*|\\s+)(@?[A-Za-z0-9_.-]{3,})`,
@@ -245,78 +289,55 @@ export function scanPii(text: string): { clean: boolean; findings: PiiFinding[] 
     findings.push({ category: 'url', excerpt: raw.slice(0, 32) })
   }
 
-  EXPLICIT_CN_HANDLE_RE.lastIndex = 0
-  for (const match of normalized.matchAll(EXPLICIT_CN_HANDLE_RE)) {
-    const candidate = match[1] ?? ''
-    if (isRealHandleCandidate(candidate, 'explicit_cue')) {
-      findings.push({ category: 'social_handle', excerpt: match[0].slice(0, 32) })
+  const scanHandleRegex = (
+    regex: RegExp,
+    candidateGroup: number,
+    mode: 'explicit_cue' | 'colon_platform' | 'bare_space',
+  ) => {
+    regex.lastIndex = 0
+    for (const match of normalized.matchAll(regex)) {
+      const candidate = match[candidateGroup] ?? ''
+      const end = (match.index ?? 0) + match[0].length
+      if (
+        isRealHandleCandidate(
+          candidate,
+          mode,
+          isFollowedByProse(normalized, end),
+          isFollowedByTopicWord(normalized, end),
+        )
+      ) {
+        findings.push({ category: 'social_handle', excerpt: match[0].slice(0, 32) })
+      }
     }
   }
 
-  COLON_CN_HANDLE_RE.lastIndex = 0
-  for (const match of normalized.matchAll(COLON_CN_HANDLE_RE)) {
-    const candidate = match[1] ?? ''
-    if (isRealHandleCandidate(candidate, 'colon_platform')) {
-      findings.push({ category: 'social_handle', excerpt: match[0].slice(0, 32) })
-    }
-  }
-
-  BARE_CN_HANDLE_RE.lastIndex = 0
-  for (const match of normalized.matchAll(BARE_CN_HANDLE_RE)) {
-    const candidate = match[1] ?? ''
-    if (isRealHandleCandidate(candidate, 'bare_space')) {
-      findings.push({ category: 'social_handle', excerpt: match[0].slice(0, 32) })
-    }
-  }
-
-  EXPLICIT_EN_ASSIGN_RE.lastIndex = 0
-  for (const match of normalized.matchAll(EXPLICIT_EN_ASSIGN_RE)) {
-    const candidate = match[1] ?? ''
-    if (isRealHandleCandidate(candidate, 'explicit_cue')) {
-      findings.push({ category: 'social_handle', excerpt: match[0].slice(0, 32) })
-    }
-  }
+  scanHandleRegex(EXPLICIT_CN_HANDLE_RE, 1, 'explicit_cue')
+  scanHandleRegex(COLON_CN_HANDLE_RE, 1, 'colon_platform')
+  scanHandleRegex(BARE_CN_HANDLE_RE, 1, 'bare_space')
+  scanHandleRegex(EXPLICIT_EN_ASSIGN_RE, 1, 'explicit_cue')
+  scanHandleRegex(EN_CONTACT_INVITE_RE, 1, 'explicit_cue')
 
   EN_SHORT_COLON_OR_SPACE_RE.lastIndex = 0
   for (const match of normalized.matchAll(EN_SHORT_COLON_OR_SPACE_RE)) {
     const hasColon = Boolean(match[1])
     const candidate = match[2] ?? ''
-    if (isRealHandleCandidate(candidate, hasColon ? 'colon_platform' : 'bare_space')) {
+    const end = (match.index ?? 0) + match[0].length
+    if (
+      isRealHandleCandidate(
+        candidate,
+        hasColon ? 'colon_platform' : 'bare_space',
+        isFollowedByProse(normalized, end),
+        isFollowedByTopicWord(normalized, end),
+      )
+    ) {
       findings.push({ category: 'social_handle', excerpt: match[0].slice(0, 32) })
     }
   }
 
-  EN_FULL_COLON_RE.lastIndex = 0
-  for (const match of normalized.matchAll(EN_FULL_COLON_RE)) {
-    const candidate = match[1] ?? ''
-    if (isRealHandleCandidate(candidate, 'colon_platform')) {
-      findings.push({ category: 'social_handle', excerpt: match[0].slice(0, 32) })
-    }
-  }
-
-  EN_AMBIG_COLON_RE.lastIndex = 0
-  for (const match of normalized.matchAll(EN_AMBIG_COLON_RE)) {
-    const candidate = match[1] ?? ''
-    if (isRealHandleCandidate(candidate, 'bare_space')) {
-      findings.push({ category: 'social_handle', excerpt: match[0].slice(0, 32) })
-    }
-  }
-
-  EN_AMBIG_ID_SPACE_RE.lastIndex = 0
-  for (const match of normalized.matchAll(EN_AMBIG_ID_SPACE_RE)) {
-    const candidate = match[1] ?? ''
-    if (isRealHandleCandidate(candidate, 'bare_space')) {
-      findings.push({ category: 'social_handle', excerpt: match[0].slice(0, 32) })
-    }
-  }
-
-  EN_FULL_SPACE_RE.lastIndex = 0
-  for (const match of normalized.matchAll(EN_FULL_SPACE_RE)) {
-    const candidate = match[1] ?? ''
-    if (isRealHandleCandidate(candidate, 'bare_space')) {
-      findings.push({ category: 'social_handle', excerpt: match[0].slice(0, 32) })
-    }
-  }
+  scanHandleRegex(EN_FULL_COLON_RE, 1, 'colon_platform')
+  scanHandleRegex(EN_AMBIG_COLON_RE, 1, 'bare_space')
+  scanHandleRegex(EN_AMBIG_ID_SPACE_RE, 1, 'bare_space')
+  scanHandleRegex(EN_FULL_SPACE_RE, 1, 'bare_space')
 
   return { clean: findings.length === 0, findings }
 }

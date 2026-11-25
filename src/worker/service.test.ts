@@ -262,10 +262,14 @@ describe('Phase 1 quiz publishing, screening gates, and double-blind immutabilit
   })
 
   test('enforces blind non-leakage, coverage gate, partial human rejection, agent/human CAS concurrency, and immutability', async () => {
+    const SAFE_QUESTION_KEYS = ['dimension', 'id', 'options', 'position', 'prompt', 'starred']
     const dbCov = createSqliteD1()
     const covPending = await setupPendingPairing(dbCov)
-    assert.equal('ownerChoice' in covPending.pairA.questions[0]!, false)
-    assert.equal('owner_choice' in covPending.pairA.questions[0]!, false)
+    assert.deepEqual(Object.keys(covPending.pairA.questions[0]!).sort(), SAFE_QUESTION_KEYS)
+
+    const revPending = await getPairingReveal(dbCov, ORIGIN, covPending.tokenA, covPending.pairingId)
+    assert.equal(revPending.phase, 'pending_agents')
+    assert.equal('partner_questions' in revPending, false)
 
     await assert.rejects(
       () => publishQuiz(dbCov, ORIGIN, covPending.tokenA, buildQuestions('replace-pending')),
@@ -294,6 +298,9 @@ describe('Phase 1 quiz publishing, screening gates, and double-blind immutabilit
       mapMatchingAnswers(covPending.pairB.questions, covPending.qsA),
     )
     assert.equal(covRes.pairing_status, 'rejected')
+    const revRejected = await getPairingReveal(dbCov, ORIGIN, covPending.tokenA, covPending.pairingId)
+    assert.equal(revRejected.phase, 'rejected')
+    assert.equal('partner_questions' in revRejected, false)
     await assert.rejects(
       () => submitHumanAnswers(dbCov, ORIGIN, covPending.tokenA, covPending.pairingId, mapMatchingAnswers(covPending.pairA.questions, covPending.qsB)),
       /has not passed agent screening/i,
@@ -316,6 +323,11 @@ describe('Phase 1 quiz publishing, screening gates, and double-blind immutabilit
       },
     })
     const pending = await setupPendingPairing(db)
+    const outsider = await publishQuiz(db, ORIGIN, null, buildQuestions('outsider-p1'))
+    await assert.rejects(
+      () => submitAgentAnswers(db, outsider.agent_token, pending.pairingId, mapMatchingAnswers(pending.pairA.questions, pending.qsB)),
+      /Not a participant/i,
+    )
 
     interleaveAgent = true
     const agentRace = await Promise.allSettled([
@@ -328,6 +340,16 @@ describe('Phase 1 quiz publishing, screening gates, and double-blind immutabilit
 
     const screenB = await submitAgentAnswers(db, pending.tokenB, pending.pairingId, mapMatchingAnswers(pending.pairB.questions, pending.qsA))
     assert.equal(screenB.pairing_status, 'ready_for_humans')
+
+    const readyInboxA = await getInbox(db, ORIGIN, pending.tokenA)
+    const readyQ = readyInboxA.ready_for_human.find((r) => r.pairing_id === pending.pairingId)?.questions?.[0]
+    assert.ok(readyQ)
+    assert.deepEqual(Object.keys(readyQ).sort(), SAFE_QUESTION_KEYS)
+
+    await assert.rejects(
+      () => submitHumanAnswers(db, ORIGIN, outsider.agent_token, pending.pairingId, mapMatchingAnswers(pending.pairA.questions, pending.qsB)),
+      /Not a participant/i,
+    )
 
     await assert.rejects(
       () => publishQuiz(db, ORIGIN, pending.tokenA, buildQuestions('replace-ready')),
@@ -347,8 +369,7 @@ describe('Phase 1 quiz publishing, screening gates, and double-blind immutabilit
       partner_questions: typeof pending.pairA.questions
     }
     assert.equal(blindA.phase, 'blind_answering')
-    assert.equal('ownerChoice' in blindA.partner_questions[0]!, false)
-    assert.equal('owner_choice' in blindA.partner_questions[0]!, false)
+    assert.deepEqual(Object.keys(blindA.partner_questions[0]!).sort(), SAFE_QUESTION_KEYS)
 
     const firstQ = blindA.partner_questions[0]!.id
     await assert.rejects(
@@ -451,6 +472,20 @@ describe('Phase 1 quiz publishing, screening gates, and double-blind immutabilit
     const selfHealed = await getPairingReveal(db, ORIGIN, pending.tokenA, pending.pairingId)
     assert.equal(selfHealed.phase, 'revealed')
 
+    await db
+      .prepare(`UPDATE pairings SET status = 'ready_for_humans', revealed_at = NULL WHERE id = ?`)
+      .bind(pending.pairingId)
+      .run()
+    const noteHealed = await postAnchorNote(db, pending.tokenA, pending.pairingId, pending.pairA.questions[0]!.id, 'Healed note')
+    assert.ok(noteHealed.note_id)
+
+    await db
+      .prepare(`UPDATE pairings SET status = 'ready_for_humans', revealed_at = NULL WHERE id = ?`)
+      .bind(pending.pairingId)
+      .run()
+    const drawHealed = await startDrawGame(db, ORIGIN, pending.tokenA, pending.pairingId)
+    assert.ok(drawHealed.game_id)
+
     const dbAgentHeal = createSqliteD1()
     const p2 = await setupPendingPairing(dbAgentHeal)
     await submitAgentAnswers(dbAgentHeal, p2.tokenA, p2.pairingId, mapMatchingAnswers(p2.pairA.questions, p2.qsB))
@@ -463,28 +498,58 @@ describe('Phase 1 quiz publishing, screening gates, and double-blind immutabilit
     assert.equal(inboxHealed.ready_for_human.some((item) => item.pairing_id === p2.pairingId), true)
   })
 
-  test('preserves revealed pairings under passive spam and enforces daily pairing cap on both caller and candidate', async () => {
+  test('preserves revealed and unanswered pending pairings under >12 rows and enforces daily pairing cap on both caller and candidate', async () => {
     const db = createSqliteD1()
     const { tokenA, pairingId } = await setupRevealedPairing(db)
+    const inboxInit = await getInbox(db, ORIGIN, tokenA)
+    const agentAId = inboxInit.agent_id
 
     for (let i = 0; i < 13; i++) {
       await publishQuiz(db, ORIGIN, null, buildQuestions(`spam-${i}`))
     }
 
-    const inboxA = await getInbox(db, ORIGIN, tokenA)
-    assert.equal(inboxA.revealed_pairings.some((p) => p.pairing_id === pairingId), true)
-
     const totalForA = await db
-      .prepare(
-        `SELECT COUNT(*) AS cnt FROM pairings
-         WHERE agent_a_id = ? OR agent_b_id = ?`,
-      )
-      .bind(inboxA.agent_id, inboxA.agent_id)
+      .prepare(`SELECT COUNT(*) AS cnt FROM pairings WHERE agent_a_id = ? OR agent_b_id = ?`)
+      .bind(agentAId, agentAId)
       .first<{ cnt: number }>()
     assert.ok(Number(totalForA?.cnt ?? 99) <= 3, `Expected passive cap <= 3, got ${totalForA?.cnt}`)
+
+    const extraAgents: string[] = []
+    for (let i = 0; i < 15; i++) {
+      const p = await publishQuiz(db, ORIGIN, null, buildQuestions(`flood-${i}`))
+      extraAgents.push(p.agent_id)
+    }
+    const baseMs = Date.now()
+    const unansweredId = 'pr_unanswered_oldest'
+    await db
+      .prepare(
+        `INSERT INTO pairings (id, agent_a_id, agent_b_id, status, created_at)
+         VALUES (?, ?, ?, 'pending_agents', ?)`,
+      )
+      .bind(unansweredId, agentAId, extraAgents[0]!, new Date(baseMs + 1000).toISOString())
+      .run()
+    for (let i = 1; i < 15; i++) {
+      await db
+        .prepare(
+          `INSERT INTO pairings (id, agent_a_id, agent_b_id, status, agent_a_submitted_at, created_at)
+           VALUES (?, ?, ?, 'pending_agents', ?, ?)`,
+        )
+        .bind(
+          `pr_answered_newer_${i}`,
+          agentAId,
+          extraAgents[i]!,
+          new Date(baseMs + 2000 + i * 1000).toISOString(),
+          new Date(baseMs + 2000 + i * 1000).toISOString(),
+        )
+        .run()
+    }
+
+    const inboxAfterFlood = await getInbox(db, ORIGIN, tokenA)
+    assert.equal(inboxAfterFlood.revealed_pairings.some((p) => p.pairing_id === pairingId), true)
+    assert.equal(inboxAfterFlood.pending_quizzes.some((p) => p.pairing_id === unansweredId), true)
   })
 
-  test('enforces participant 403 on reveal/notes, protects revealed pairings from republish, validates note ownership, and erases data', async () => {
+  test('enforces participant 403 on reveal/notes/startDraw, protects revealed pairings from republish, validates note ownership, and erases data', async () => {
     const db = createSqliteD1()
     const { tokenA, tokenB, pairingId, questionId } = await setupRevealedPairing(db)
 
@@ -502,6 +567,10 @@ describe('Phase 1 quiz publishing, screening gates, and double-blind immutabilit
     )
     await assert.rejects(
       () => postAnchorNote(db, pubC.agent_token, pairingId, questionId, 'Intruder note'),
+      /Not a participant/i,
+    )
+    await assert.rejects(
+      () => startDrawGame(db, ORIGIN, pubC.agent_token, pairingId),
       /Not a participant/i,
     )
 
@@ -680,6 +749,24 @@ describe('Subtext Draw protocol invariants', () => {
     for (const p of round2Prompts) {
       assert.equal(/[\u4e00-\u9fff]/.test(p.subtext), false, `Expected English Round 2 subtext, got ${p.subtext}`)
     }
+
+    const round2EnId = skippedEn.next_round!.id
+    await dbEn
+      .prepare(
+        `UPDATE draw_rounds
+         SET secret_word = 'Midnight breeze', subtext_options_json = NULL, correct_option = NULL,
+             svg_markup = '<svg></svg>', status = 'awaiting_guess'
+         WHERE id = ?`,
+      )
+      .bind(round2EnId)
+      .run()
+    const gaveUpEn = await guessDrawing(dbEn, ORIGIN, enGame.tokenA, enGame.gameId, round2EnId, 'dirty @handle', true)
+    assert.equal(gaveUpEn.revealed, true)
+    const storedGaveUpEn = await dbEn
+      .prepare('SELECT last_guess FROM draw_rounds WHERE id = ?')
+      .bind(round2EnId)
+      .first<{ last_guess: string }>()
+    assert.equal(storedGaveUpEn?.last_guess, '(gave up)')
 
     const dbZh = createSqliteD1()
     const zhGame = await setupDrawGame(dbZh, 'zh')

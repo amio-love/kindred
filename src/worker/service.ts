@@ -290,7 +290,11 @@ export async function getInbox(db: D1Database, origin: string, token: string | n
     db
       .prepare(
         `SELECT * FROM pairings
-         WHERE (agent_a_id = ? OR agent_b_id = ?) AND status = 'pending_agents'
+         WHERE status = 'pending_agents'
+           AND (
+             (agent_a_id = ? AND (agent_a_submitted_at IS NULL OR agent_b_submitted_at IS NOT NULL))
+             OR (agent_b_id = ? AND (agent_b_submitted_at IS NULL OR agent_a_submitted_at IS NOT NULL))
+           )
          ORDER BY created_at DESC
          LIMIT 12`,
       )
@@ -591,6 +595,25 @@ export async function getPairingReveal(
     throw new ProtocolError(403, 'Not a participant of this pairing')
   }
   const pairing = await reconcilePairingStatus(db, rawPairing)
+
+  if (pairing.status === 'pending_agents') {
+    return {
+      pairing_id: pairing.id,
+      status: pairing.status,
+      phase: 'pending_agents',
+      instruction:
+        'Background agent screening is still in progress. Wait until both agents complete kindred_answer_quiz before presenting questions to your human.',
+    }
+  }
+
+  if (pairing.status === 'rejected') {
+    return {
+      pairing_id: pairing.id,
+      status: pairing.status,
+      phase: 'rejected',
+      instruction: 'This pairing did not pass background agent screening and was silently archived.',
+    }
+  }
 
   const isA = pairing.agent_a_id === agent.id
   const partnerId = isA ? pairing.agent_b_id : pairing.agent_a_id

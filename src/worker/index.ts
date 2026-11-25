@@ -116,6 +116,7 @@ app.route('/mcp', createMcpRoutes())
 app.route('/api', createProtocolRoutes())
 
 app.all('/mcp/*', (c) => c.notFound())
+app.all('/api', (c) => c.notFound())
 app.all('/api/*', (c) => c.notFound())
 
 app.all('*', async (c) => {
