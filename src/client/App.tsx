@@ -1,25 +1,28 @@
 import { useEffect, useState } from 'react'
+import { COPY, detectInitialLocale, type Locale } from './i18n'
+import LiveStage from './LiveStage'
 import { registerKindredWebMcp } from './webmcp'
 
-const STEPS = [
-  {
-    num: '01',
-    title: '你的 AI 替你出几道私房选择题',
-    desc: '只聊品味和小习惯，不碰姓名、公司或隐私，你在聊天里看一眼满意再发。',
-  },
-  {
-    num: '02',
-    title: '它在后台替你找答得最合拍的人',
-    desc: '两个 AI 不假装替你聊天，只靠互相答题挑出真正同频的陌生人。',
-  },
-  {
-    num: '03',
-    title: '你亲自答一遍，再一起玩你画我猜',
-    desc: '找到人后花 1 分钟亲答对方的题，顺便看看你的 AI 到底懂不懂你；聊得来就各自出词，让各自的 AI 替你们画图猜词。',
-  },
-] as const
+function fallbackCopy(text: string): boolean {
+  const area = document.createElement('textarea')
+  area.value = text
+  area.setAttribute('readonly', '')
+  area.style.position = 'fixed'
+  area.style.opacity = '0'
+  document.body.appendChild(area)
+  area.select()
+  let ok = false
+  try {
+    ok = document.execCommand('copy')
+  } catch {
+    ok = false
+  }
+  document.body.removeChild(area)
+  return ok
+}
 
 export default function App() {
+  const [locale, setLocale] = useState<Locale>(detectInitialLocale)
   const [copied, setCopied] = useState(false)
 
   useEffect(() => {
@@ -27,77 +30,109 @@ export default function App() {
     return reg.cleanup
   }, [])
 
+  useEffect(() => {
+    document.documentElement.lang = locale === 'zh' ? 'zh-CN' : 'en'
+    document.title = COPY[locale].pageTitle
+    window.localStorage.setItem('kindred_lang', locale)
+  }, [locale])
+
+  const copy = COPY[locale]
   const origin = typeof window !== 'undefined' ? window.location.origin : ''
-  const skillUrl = `${origin}/skill.md`
-  const agentPrompt = `请读一下 ${skillUrl}，然后在这条对话里带我开始 Kindred。`
+  const promptText = copy.promptTemplate(`${origin}/skill.md`)
 
   const handleCopy = async () => {
+    let ok = false
     try {
-      await navigator.clipboard.writeText(agentPrompt)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2400)
+      await navigator.clipboard.writeText(promptText)
+      ok = true
     } catch {
-      setCopied(false)
+      ok = fallbackCopy(promptText)
+    }
+    if (ok) {
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 2400)
     }
   }
 
   return (
-    <main className="shell">
-      <article className="card">
-        <header className="hero">
-          <div className="wordmark">Kindred</div>
-          <h1>让懂你的 AI，替你找到真同好。</h1>
-          <p className="subtitle">
-            不用注册，也不用填个人资料。把下面这句话发给你的个人 AI（Meta Muse、ChatGPT、Claude、Grok 等），剩下的全部在聊天里完成。
-          </p>
-        </header>
+    <div className="page">
+      <header className="topbar">
+        <a href="/" className="brand" aria-label="Kindred">
+          <span className="brand-mark" aria-hidden="true">
+            <span className="brand-dot brand-dot--a" />
+            <span className="brand-dot brand-dot--b" />
+          </span>
+          <span className="brand-name">Kindred</span>
+        </a>
 
-        <ol className="steps">
-          {STEPS.map((step) => (
-            <li key={step.num} className="step">
-              <span className="step-num" aria-hidden="true">
-                {step.num}
-              </span>
-              <div className="step-body">
-                <strong>{step.title}</strong>
-                <p>{step.desc}</p>
-              </div>
-            </li>
-          ))}
-        </ol>
-
-        <section className="action-box" aria-label="开始方式">
-          <span className="action-label">复制下面这句话，发给你的 AI</span>
-          <code className="code-line">{agentPrompt}</code>
-          <div className="action-row">
-            <button type="button" className="primary-btn" onClick={handleCopy}>
-              {copied ? '已复制，粘贴给你的 AI 就行' : '复制发给我的 AI'}
-            </button>
-          </div>
-        </section>
-
-        <footer className="meta">
-          <p className="privacy">
-            你的聊天记录留在你自己的 AI 里。Kindred 不建账号、不收个人资料，只存脱敏后的题目与游戏进度，随时可在对话里让 AI 一键清空。
-          </p>
-          <nav className="meta-links" aria-label="相关链接">
-            <a href="/skill.md" className="meta-link">
-              开放协议
+        <div className="topbar-right">
+          <nav className="topbar-links" aria-label="Links">
+            <a href="/skill.md" className="top-link">
+              {copy.protocolLink}
             </a>
-            <span className="dot" aria-hidden="true">
-              ·
-            </span>
             <a
               href="https://github.com/amio-love/kindred"
               target="_blank"
               rel="noreferrer"
-              className="meta-link"
+              className="top-link"
             >
               GitHub
             </a>
           </nav>
-        </footer>
-      </article>
-    </main>
+
+          <div className="lang-switch" role="group" aria-label="Language">
+            <button
+              type="button"
+              className={`lang-btn ${locale === 'zh' ? 'lang-btn--active' : ''}`}
+              aria-pressed={locale === 'zh'}
+              onClick={() => setLocale('zh')}
+            >
+              中
+            </button>
+            <button
+              type="button"
+              className={`lang-btn ${locale === 'en' ? 'lang-btn--active' : ''}`}
+              aria-pressed={locale === 'en'}
+              onClick={() => setLocale('en')}
+            >
+              EN
+            </button>
+          </div>
+        </div>
+      </header>
+
+      <main className="hero-grid">
+        <section className="hero-copy">
+          <h1>{copy.headline}</h1>
+          <p className="hero-sub">{copy.subtitle}</p>
+
+          <div className="prompt-dock">
+            <code className="prompt-text">{promptText}</code>
+            <button
+              type="button"
+              className={`cta-btn ${copied ? 'cta-btn--copied' : ''}`}
+              onClick={handleCopy}
+            >
+              {copied ? copy.copiedButton : copy.copyButton}
+            </button>
+          </div>
+
+          <ul className="trust-row">
+            {copy.trustItems.map((item) => (
+              <li key={item}>{item}</li>
+            ))}
+          </ul>
+
+          <div className="hosts-row">
+            <span className="hosts-label">{copy.worksWith}</span>
+            <span className="hosts-list">Meta Muse · ChatGPT · Claude · Grok · OpenClaw</span>
+          </div>
+        </section>
+
+        <section className="hero-stage" aria-label={copy.stageHeader}>
+          <LiveStage copy={copy} />
+        </section>
+      </main>
+    </div>
   )
 }
