@@ -666,6 +666,11 @@ describe('Phase 1 quiz publishing, screening gates, and double-blind immutabilit
       .bind('agt_000_low', 'agt_000_low')
       .first<{ cnt: number }>()
     assert.equal(Number(lowAfterPassive?.cnt ?? -1), 3)
+    const highZeroWhenMidNotReady = await dbCap
+      .prepare('SELECT COUNT(*) AS cnt FROM pairings WHERE agent_a_id = ? OR agent_b_id = ?')
+      .bind('agt_zzz_high', 'agt_zzz_high')
+      .first<{ cnt: number }>()
+    assert.equal(Number(highZeroWhenMidNotReady?.cnt ?? -1), 0)
 
     await dbCap.prepare('DELETE FROM pairings').run()
     for (let i = 0; i < 3; i++) {

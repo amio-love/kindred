@@ -1183,6 +1183,7 @@ html[lang='en'] .closing h2 {
 
   .subtext-grid {
     grid-template-columns: 1fr;
+    width: 100%;
     max-width: 440px;
     margin: 0 auto;
   }
