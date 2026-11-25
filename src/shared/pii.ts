@@ -126,7 +126,7 @@ const DIRECT_PATTERNS: ReadonlyArray<{ category: PiiFinding['category']; pattern
   {
     category: 'phone',
     pattern:
-      /(?:\b(?:call|text|phone|tel|sms|whatsapp|signal|cell|mobile)\s*(?:me\s*)?(?:at\s*)?[:：=]?\s*|电话\s*[:：=]?\s*)(?<!\d)[2-9]\d{2}[2-9]\d{6}(?!\d)/gi,
+      /(?:\b(?:call|text|phone|tel|sms|whatsapp|signal|cell|mobile)[ \t]*(?:me[ \t]*)?(?:at[ \t]*)?[:：=]?[ \t]*|电话[ \t]*[:：=]?[ \t]*)(?<!\d)[2-9]\d{2}[2-9]\d{6}(?!\d)/gi,
   },
   {
     category: 'social_handle',
@@ -139,7 +139,7 @@ const DIRECT_PATTERNS: ReadonlyArray<{ category: PiiFinding['category']; pattern
   {
     category: 'social_handle',
     pattern: new RegExp(
-      `(?:\\bqq|扣扣|加\\s*q|\\bq\\s*群|\\bq\\s*号)\\s*(?:群|(?:账|帐)?号(?:码)?|ID)?\\s*(?:是|为|叫)?\\s*${WRAP}[1-9]\\d{4,11}\\b`,
+      `(?:\\bqq|扣扣|加[ \\t]*q|\\bq[ \\t]*群|\\bq[ \\t]*号)[ \\t]*(?:群|(?:账|帐)?号(?:码)?|ID)?[ \\t]*(?:是|为|叫)?[ \\t]*${WRAP}[1-9]\\d{4,11}\\b`,
       'gi',
     ),
   },
@@ -149,7 +149,7 @@ const PATH_URL_RE =
   /\b([A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)\.([a-z]{2,12})\/[A-Za-z0-9._~:/?#[\]@!$&'()*+,;=%-]+/g
 
 const PERSONAL_SITE_RE = new RegExp(
-  `(?:(?:我的|本人|个人)\\s*(?:个人)?(?:主页|站点|网站|博客|官网)\\s*(?:地址|链接|网址)?\\s*(?:是|为|叫)?|\\bmy\\s+(?:personal\\s+)?(?:site|website|blog|homepage|portfolio)\\s*(?:(?:url|link|address)\\s*)?(?:is\\b|[:：=])?)\\s*${WRAP}([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*\\.(?:com|net|org|io|me|dev|co|app|site|xyz|cc|cn|im|blog|studio))\\b`,
+  `(?:(?:我的|本人|个人)[ \\t]*(?:个人)?(?:主页|站点|网站|博客|官网)[ \\t]*(?:地址|链接|网址)?[ \\t]*(?:是|为|叫)?|\\bmy[ \\t]+(?:personal[ \\t]+)?(?:site|website|blog|homepage|portfolio)[ \\t]*(?:(?:url|link|address)[ \\t]*)?(?:is\\b|[:：=])?)[ \\t]*${WRAP}([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*\\.(?:com|net|org|io|me|dev|co|app|site|xyz|cc|cn|im|blog|studio))\\b`,
   'gi',
 )
 
@@ -214,7 +214,8 @@ const STRONG_HANDLE_CUES: readonly RegExp[] = [
 ]
 
 const BARE_CN_CONTENT_CUE_RE = new RegExp(`(?:${CN_CONTENT_PLATS})\\s*(?:是|为|叫|[:：=])\\s*${WRAP}$`, 'i')
-const CN_CONTENT_TOPIC_AFTER_RE = /^[ \t]*(?!互关|关注|求关|私信|来聊|聊聊|找我|加我|滴滴)[\u4e00-\u9fff]{2,}/
+const CN_CONTENT_TOPIC_AFTER_RE =
+  /^[ \t]*(?:[A-Za-z0-9+/.#-]{1,12}[ \t]+){0,2}(?!互关|关注|求关|私信|来聊|聊聊|找我|加我|滴滴)[\u4e00-\u9fff]{2,}/
 
 const TRAILING_BEFORE_RE = new RegExp(
   `\\b(?:i\\s+am|i['’]m|im|call\\s+me|find|add|dm|follow|reach|contact|message|search|check|it['’]s|its)\\s*${WRAP}$`,
@@ -292,8 +293,11 @@ export function scanPii(text: string): { clean: boolean; findings: PiiFinding[] 
     const tok = match[0]
     const start = match.index ?? 0
     const end = start + tok.length
-    const before = normalized.slice(Math.max(0, start - 48), start)
-    const after = normalized.slice(end, end + 32)
+    const lineStart = normalized.lastIndexOf('\n', start - 1) + 1
+    const nextNl = normalized.indexOf('\n', end)
+    const lineEnd = nextNl === -1 ? normalized.length : nextNl
+    const before = normalized.slice(Math.max(lineStart, start - 48), start)
+    const after = normalized.slice(end, Math.min(lineEnd, end + 40))
 
     if (isHandleShape(tok, false) && hasCueBefore(before, EXPLICIT_IDENTITY_CUES)) {
       findings.push({ category: 'social_handle', excerpt: tok.slice(0, 32) })
