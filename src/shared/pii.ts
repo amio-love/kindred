@@ -215,7 +215,7 @@ const STRONG_HANDLE_CUES: readonly RegExp[] = [
 
 const BARE_CN_CONTENT_CUE_RE = new RegExp(`(?:${CN_CONTENT_PLATS})\\s*(?:是|为|叫|[:：=])\\s*${WRAP}$`, 'i')
 const CN_CONTACT_SOLICIT_RE =
-  /互关|互粉|回关|求关注|关注我|私信|私聊|来聊|聊聊|找我|加我|加个|滴滴|和我聊|联系我|搜我|我的号|账号|帐号/
+  /^(?:欢迎|可以|直接|随时|请|来)?(?:互关|互粉|回关|求关注|关注我|私信|私聊|找我|加我|滴滴|和我聊|联系我|搜我|是我的号|是我号)/
 
 function isBareContentHandleClause(after: string): boolean {
   const clause = (after.split(/(?<!\d)\.(?!\d)|[。!！?？;；]/, 1)[0] ?? '').trim()
