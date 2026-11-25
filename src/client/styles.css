@@ -361,7 +361,8 @@ a:focus-visible {
 
 .host-slot {
   height: 38px;
-  min-width: 146px;
+  width: 158px;
+  flex: 0 0 158px;
   overflow: hidden;
   display: flex;
   align-items: center;
@@ -1217,6 +1218,30 @@ html[lang='en'] .closing h2 {
 
   .host-top-row {
     flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .host-reel-group {
+    gap: 8px;
+  }
+
+  .host-slot {
+    width: 146px;
+    flex: 0 0 146px;
+  }
+
+  .host-active-pill {
+    gap: 7px;
+    padding: 4px 11px 4px 6px;
+  }
+
+  .host-active-name {
+    font-size: 0.9rem;
+  }
+
+  .host-more-chip {
+    padding: 4px 9px;
+    font-size: 0.72rem;
   }
 
   .host-pills {

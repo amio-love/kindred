@@ -681,6 +681,15 @@ describe('Phase 1 quiz publishing, screening gates, and double-blind immutabilit
       .first<{ cnt: number }>()
     assert.equal(Number(highAfterPassive?.cnt ?? -1), 3)
 
+    const agedCand23h = new Date(Date.now() - 23 * 3_600_000).toISOString()
+    await dbCap.prepare('UPDATE pairings SET created_at = ?').bind(agedCand23h).run()
+    await getInbox(dbCap, ORIGIN, 'knd_low')
+    const highAfter23h = await dbCap
+      .prepare('SELECT COUNT(*) AS cnt FROM pairings WHERE agent_a_id = ? OR agent_b_id = ?')
+      .bind('agt_zzz_high', 'agt_zzz_high')
+      .first<{ cnt: number }>()
+    assert.equal(Number(highAfter23h?.cnt ?? -1), 3)
+
     const agedIso = new Date(Date.now() - 25 * 3_600_000).toISOString()
     await dbCap.prepare('UPDATE pairings SET created_at = ?').bind(agedIso).run()
     await getInbox(dbCap, ORIGIN, 'knd_low')
