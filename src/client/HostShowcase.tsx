@@ -215,11 +215,17 @@ export default function HostShowcase({
       }}
       onMouseEnter={() => setPaused(true)}
       onMouseLeave={() => setPaused(false)}
+      onFocus={() => setPaused(true)}
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+          setPaused(false)
+        }
+      }}
     >
       <div className="host-top-row">
         <div className="host-reel-group">
           <span className="host-prefix">{label}</span>
-          <div className="host-slot" aria-live="polite">
+          <div className="host-slot" aria-live={paused ? 'polite' : 'off'}>
             <div key={`${locale}-${active.id}`} className="host-active-pill">
               <span
                 className={`host-icon-badge ${active.lightPlate ? 'host-icon-badge--light' : ''}`}

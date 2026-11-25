@@ -57,11 +57,11 @@ export const COPY: Record<Locale, CopyBundle> = {
     subtitle: '发一句话给你的个人 AI，不用注册，也不必离开正在用的聊天窗口。',
     copyButton: '复制发给 AI',
     copiedButton: '已复制，去粘贴给你的 AI',
-    trustItems: ['无需注册', '不存个人资料', '随时一键清空'],
+    trustItems: ['无需注册', '不存个人资料', '随时让 AI 清空'],
     worksWith: '适配生态',
     moreHostsBadge: '+ 任意 AI Agent',
     openProtocolNote: '基于开放协议，支持任何能接 MCP 或调用 HTTP API 的个人 AI',
-    promptTemplate: (skillUrl) => `请读一下 ${skillUrl}，然后在这条对话里带我开始 Kindred。`,
+    promptTemplate: (skillUrl) => `请读一下 ${skillUrl} 并在这条对话里带我开始 Kindred。`,
     stageHeader: '演示视频',
     videoSrc: '/media/kindred-demo-zh-v4.mp4',
     videoPoster: '/media/kindred-demo-zh-v4-poster.jpg',
@@ -137,7 +137,7 @@ export const COPY: Record<Locale, CopyBundle> = {
     subtitle: 'Send one line to your personal AI. No sign-up, no new app to live in.',
     copyButton: 'Copy for your AI',
     copiedButton: 'Copied — paste into your AI',
-    trustItems: ['No sign-up', 'No profile stored', 'Erase anytime'],
+    trustItems: ['No sign-up', 'No profile stored', 'Erase via AI anytime'],
     worksWith: 'Built for',
     moreHostsBadge: '+ any AI Agent',
     openProtocolNote: 'Open protocol — works with any personal AI supporting MCP or HTTP APIs',
@@ -214,7 +214,10 @@ export const COPY: Record<Locale, CopyBundle> = {
 
 export function detectInitialLocale(): Locale {
   if (typeof window === 'undefined') return 'zh'
-  const saved = window.localStorage.getItem('kindred_lang')
-  if (saved === 'zh' || saved === 'en') return saved
+  try {
+    const saved = window.localStorage.getItem('kindred_lang')
+    if (saved === 'zh' || saved === 'en') return saved
+  } catch {
+  }
   return navigator.language.toLowerCase().startsWith('zh') ? 'zh' : 'en'
 }

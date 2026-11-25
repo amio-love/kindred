@@ -10,7 +10,7 @@ import {
   strokesToStaticSvg,
   validateStrokes,
 } from '../shared/drawing'
-import { scanPii } from '../shared/pii'
+import { scanPii, scanPiiFields } from '../shared/pii'
 import {
   OPTION_KEYS,
   buildAgentSyncReport,
@@ -89,14 +89,16 @@ export async function publishQuiz(
     if (!item || typeof item !== 'object') {
       throw new ProtocolError(400, `questions[${i}] must be an object`)
     }
-    const prompt = typeof item.prompt === 'string' ? item.prompt.trim().slice(0, 140) : ''
-    if (!prompt) {
-      throw new ProtocolError(400, `questions[${i}].prompt is required`)
+    const prompt = typeof item.prompt === 'string' ? item.prompt.trim() : ''
+    if (prompt.length < 2 || prompt.length > 140) {
+      throw new ProtocolError(400, `questions[${i}].prompt must be 2 to 140 characters (received ${prompt.length})`)
     }
     const defaultDim = detectLocaleFromTexts([prompt]) === 'en' ? 'Taste & habits' : '品味与习惯'
-    const dimension = typeof item.dimension === 'string' && item.dimension.trim()
-      ? item.dimension.trim().slice(0, 24)
-      : defaultDim
+    const rawDim = typeof item.dimension === 'string' ? item.dimension.trim() : ''
+    if (rawDim.length > 24) {
+      throw new ProtocolError(400, `questions[${i}].dimension must be at most 24 characters (received ${rawDim.length})`)
+    }
+    const dimension = rawDim || defaultDim
 
     const rawOptions = item.options as Record<string, unknown> | null
     if (!rawOptions || typeof rawOptions !== 'object') {
@@ -105,11 +107,19 @@ export async function publishQuiz(
 
     const options = {} as QuestionOptions
     for (const key of OPTION_KEYS) {
-      const val = typeof rawOptions[key] === 'string' ? rawOptions[key].trim().slice(0, 100) : ''
-      if (!val) {
-        throw new ProtocolError(400, `questions[${i}].options.${key} is required`)
+      const val = typeof rawOptions[key] === 'string' ? rawOptions[key].trim() : ''
+      if (val.length < 1 || val.length > 100) {
+        throw new ProtocolError(
+          400,
+          `questions[${i}].options.${key} must be 1 to 100 characters (received ${val.length})`,
+        )
       }
       options[key] = val
+    }
+
+    const distinctOpts = new Set(OPTION_KEYS.map((key) => normalizeGuess(options[key])))
+    if (distinctOpts.size !== 4) {
+      throw new ProtocolError(400, `questions[${i}].options must contain 4 distinct choices`)
     }
 
     const ownerChoice = item.owner_choice ?? item.ownerChoice
@@ -119,7 +129,7 @@ export async function publishQuiz(
     const rawPred = item.agent_predicted ?? item.agentPredicted
     const agentPredicted = isOptionKey(rawPred) ? rawPred : ownerChoice
 
-    const pii = scanPii([dimension, prompt, options.A, options.B, options.C, options.D].join(' '))
+    const pii = scanPiiFields([dimension, prompt, options.A, options.B, options.C, options.D])
     if (!pii.clean) {
       throw new ProtocolError(
         400,
@@ -139,22 +149,46 @@ export async function publishQuiz(
     })
   }
 
-  let agent = await getAgentByToken(db, token)
+  const trimmedToken = typeof token === 'string' ? token.trim() : ''
+  let agent = trimmedToken ? await getAgentByToken(db, trimmedToken) : null
+  if (trimmedToken && !agent) {
+    throw new ProtocolError(401, 'Invalid agent_token')
+  }
+
   let mintedToken: string | null = null
   const now = new Date().toISOString()
+  const batchStatements: D1PreparedStatement[] = []
 
   if (!agent) {
     const id = randomToken('agt_', 12)
     mintedToken = randomToken('knd_', 24)
     const tokenHash = await sha256Hex(mintedToken)
-    await db
-      .prepare('INSERT INTO agents (id, token_hash, quiz_ready, created_at, last_seen_at) VALUES (?, ?, 1, ?, ?)')
-      .bind(id, tokenHash, now, now)
-      .run()
+    batchStatements.push(
+      db
+        .prepare('INSERT INTO agents (id, token_hash, quiz_ready, created_at, last_seen_at) VALUES (?, ?, 1, ?, ?)')
+        .bind(id, tokenHash, now, now),
+    )
     agent = { id, token_hash: tokenHash, quiz_ready: 1, created_at: now, last_seen_at: now }
   } else {
-    await db.prepare('DELETE FROM questions WHERE agent_id = ?').bind(agent.id).run()
-    await db.prepare('UPDATE agents SET quiz_ready = 1, last_seen_at = ? WHERE id = ?').bind(now, agent.id).run()
+    const blockingPairing = await db
+      .prepare(
+        `SELECT id FROM pairings
+         WHERE (agent_a_id = ? OR agent_b_id = ?)
+           AND status IN ('pending_agents', 'ready_for_humans', 'revealed')
+         LIMIT 1`,
+      )
+      .bind(agent.id, agent.id)
+      .first<{ id: string }>()
+    if (blockingPairing) {
+      throw new ProtocolError(
+        409,
+        'Cannot replace quiz while active or revealed pairings exist; call kindred_erase to start fresh',
+      )
+    }
+    batchStatements.push(
+      db.prepare('DELETE FROM questions WHERE agent_id = ?').bind(agent.id),
+      db.prepare('UPDATE agents SET quiz_ready = 1, last_seen_at = ? WHERE id = ?').bind(now, agent.id),
+    )
   }
 
   const questionIds: string[] = []
@@ -163,32 +197,35 @@ export async function publishQuiz(
     const shuffled = shuffleQuestionOptions(q.options, q.ownerChoice, q.agentPredicted)
     const qId = randomToken('q_', 10)
     questionIds.push(qId)
-    await db
-      .prepare(
-        `INSERT INTO questions (
-           id, agent_id, position, dimension, prompt, options_json,
-           owner_choice, agent_predicted, confidence, starred, created_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .bind(
-        qId,
-        agent.id,
-        i + 1,
-        q.dimension,
-        q.prompt,
-        JSON.stringify(shuffled.options),
-        shuffled.ownerChoice,
-        shuffled.agentPredicted,
-        q.confidence,
-        q.starred ? 1 : 0,
-        now,
-      )
-      .run()
+    batchStatements.push(
+      db
+        .prepare(
+          `INSERT INTO questions (
+             id, agent_id, position, dimension, prompt, options_json,
+             owner_choice, agent_predicted, confidence, starred, created_at
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .bind(
+          qId,
+          agent.id,
+          i + 1,
+          q.dimension,
+          q.prompt,
+          JSON.stringify(shuffled.options),
+          shuffled.ownerChoice,
+          shuffled.agentPredicted,
+          q.confidence,
+          q.starred ? 1 : 0,
+          now,
+        ),
+    )
   }
+
+  await db.batch(batchStatements)
 
   const newPairings = await ensurePoolPairingsForAgent(db, agent.id)
   const base = origin.replace(/\/+$/, '')
-  const effectiveToken = mintedToken ?? token!
+  const effectiveToken = mintedToken ?? trimmedToken
 
   return {
     agent_id: agent.id,
@@ -371,15 +408,26 @@ export async function submitAgentAnswers(
   }
 
   const isA = pairing.agent_a_id === agent.id
+  const col = isA ? 'agent_a_submitted_at' : 'agent_b_submitted_at'
+  const alreadySubmitted = isA ? Boolean(pairing.agent_a_submitted_at) : Boolean(pairing.agent_b_submitted_at)
+  if (pairing.status !== 'pending_agents') {
+    throw new ProtocolError(409, 'Pairing is no longer accepting agent screening answers')
+  }
+  if (alreadySubmitted) {
+    throw new ProtocolError(409, 'Agent screening answers already submitted')
+  }
+
   const partnerId = isA ? pairing.agent_b_id : pairing.agent_a_id
   const partnerQs = await listQuestions(db, partnerId)
   const validIds = new Set(partnerQs.map((q) => q.id))
 
-  const now = new Date().toISOString()
-  let saved = 0
+  const seenIds = new Set<string>()
+  const parsedAnswers: Array<{ qId: string; choice: string }> = []
   for (const raw of rawAnswers) {
     const item = raw as Record<string, unknown> | null
-    if (!item || typeof item !== 'object') continue
+    if (!item || typeof item !== 'object') {
+      throw new ProtocolError(400, 'Invalid answer entry')
+    }
     const qId = typeof item.question_id === 'string'
       ? item.question_id
       : typeof item.questionId === 'string'
@@ -389,20 +437,37 @@ export async function submitAgentAnswers(
     if (!validIds.has(qId) || !isAnswerChoice(choice)) {
       throw new ProtocolError(400, `Invalid question_id or choice (${qId})`)
     }
-    await db
-      .prepare(
-        `INSERT INTO quiz_answers (pairing_id, agent_id, source, question_id, choice, created_at)
-         VALUES (?, ?, 'agent', ?, ?, ?)
-         ON CONFLICT (pairing_id, agent_id, source, question_id)
-         DO UPDATE SET choice = excluded.choice, created_at = excluded.created_at`,
-      )
-      .bind(pairing.id, agent.id, qId, choice, now)
-      .run()
-    saved += 1
+    if (seenIds.has(qId)) {
+      throw new ProtocolError(400, `Duplicate question_id (${qId})`)
+    }
+    seenIds.add(qId)
+    parsedAnswers.push({ qId, choice })
   }
 
-  const col = isA ? 'agent_a_submitted_at' : 'agent_b_submitted_at'
-  await db.prepare(`UPDATE pairings SET ${col} = ? WHERE id = ?`).bind(now, pairing.id).run()
+  const now = new Date().toISOString()
+  const batchStatements: D1PreparedStatement[] = parsedAnswers.map(({ qId, choice }) =>
+    db
+      .prepare(
+        `INSERT INTO quiz_answers (pairing_id, agent_id, source, question_id, choice, created_at)
+         SELECT ?, ?, 'agent', ?, ?, ?
+         WHERE EXISTS (
+           SELECT 1 FROM pairings
+           WHERE id = ? AND status = 'pending_agents' AND ${col} IS NULL
+         )`,
+      )
+      .bind(pairing.id, agent.id, qId, choice, now, pairing.id),
+  )
+  batchStatements.push(
+    db
+      .prepare(`UPDATE pairings SET ${col} = ? WHERE id = ? AND status = 'pending_agents' AND ${col} IS NULL`)
+      .bind(now, pairing.id),
+  )
+  const batchResults = await db.batch(batchStatements)
+  const updateResult = batchResults[batchResults.length - 1]
+  if (Number(updateResult?.meta?.changes ?? 0) === 0) {
+    throw new ProtocolError(409, 'Agent screening answers already submitted')
+  }
+  const saved = parsedAnswers.length
 
   const updated = await db.prepare('SELECT * FROM pairings WHERE id = ?').bind(pairing.id).first<PairingRow>()
   let nextStatus: PairingStatus = updated?.status ?? 'pending_agents'
@@ -416,8 +481,18 @@ export async function submitAgentAnswers(
     ])
     const dirA = evaluateDirection(qsB, ansA)
     const dirB = evaluateDirection(qsA, ansB)
-    nextStatus = passesAgentMatchGate(dirA, dirB) ? 'ready_for_humans' : 'rejected'
-    await db.prepare('UPDATE pairings SET status = ? WHERE id = ?').bind(nextStatus, updated.id).run()
+    const computedStatus: PairingStatus = passesAgentMatchGate(dirA, dirB) ? 'ready_for_humans' : 'rejected'
+    await db
+      .prepare(
+        `UPDATE pairings
+         SET status = ?
+         WHERE id = ? AND status = 'pending_agents'
+           AND agent_a_submitted_at IS NOT NULL AND agent_b_submitted_at IS NOT NULL`,
+      )
+      .bind(computedStatus, updated.id)
+      .run()
+    const canonical = await db.prepare('SELECT status FROM pairings WHERE id = ?').bind(updated.id).first<{ status: PairingStatus }>()
+    nextStatus = canonical?.status ?? computedStatus
   }
 
   return {
@@ -573,11 +648,20 @@ export async function submitHumanAnswers(
   if (pairing.agent_a_id !== agent.id && pairing.agent_b_id !== agent.id) {
     throw new ProtocolError(403, 'Not a participant of this pairing')
   }
-  if (pairing.status === 'pending_agents' || pairing.status === 'rejected') {
+  if (pairing.status === 'revealed') {
+    throw new ProtocolError(409, 'Pairing is already revealed; human answers are immutable')
+  }
+  if (pairing.status !== 'ready_for_humans') {
     throw new ProtocolError(409, 'Pairing has not passed agent screening yet')
   }
 
   const isA = pairing.agent_a_id === agent.id
+  const col = isA ? 'human_a_submitted_at' : 'human_b_submitted_at'
+  const alreadySubmitted = isA ? Boolean(pairing.human_a_submitted_at) : Boolean(pairing.human_b_submitted_at)
+  if (alreadySubmitted) {
+    throw new ProtocolError(409, 'Human answers already submitted')
+  }
+
   const partnerId = isA ? pairing.agent_b_id : pairing.agent_a_id
   const partnerQs = await listQuestions(db, partnerId)
   const validIds = new Set(partnerQs.map((q) => q.id))
@@ -586,7 +670,8 @@ export async function submitHumanAnswers(
     throw new ProtocolError(400, `Expected ${partnerQs.length} human answers (one per partner question)`)
   }
 
-  const now = new Date().toISOString()
+  const seenIds = new Set<string>()
+  const parsedAnswers: Array<{ qId: string; choice: OptionKey }> = []
   for (const raw of rawAnswers) {
     const item = raw as Record<string, unknown> | null
     if (!item || typeof item !== 'object') {
@@ -601,24 +686,46 @@ export async function submitHumanAnswers(
     if (!validIds.has(qId) || !isOptionKey(choice)) {
       throw new ProtocolError(400, `Each human answer must choose A, B, C, or D (${qId})`)
     }
-    await db
-      .prepare(
-        `INSERT INTO quiz_answers (pairing_id, agent_id, source, question_id, choice, created_at)
-         VALUES (?, ?, 'human', ?, ?, ?)
-         ON CONFLICT (pairing_id, agent_id, source, question_id)
-         DO UPDATE SET choice = excluded.choice, created_at = excluded.created_at`,
-      )
-      .bind(pairing.id, agent.id, qId, choice, now)
-      .run()
+    if (seenIds.has(qId)) {
+      throw new ProtocolError(400, `Duplicate question_id (${qId})`)
+    }
+    seenIds.add(qId)
+    parsedAnswers.push({ qId, choice })
   }
 
-  const col = isA ? 'human_a_submitted_at' : 'human_b_submitted_at'
-  await db.prepare(`UPDATE pairings SET ${col} = ? WHERE id = ?`).bind(now, pairing.id).run()
+  const now = new Date().toISOString()
+  const batchStatements: D1PreparedStatement[] = parsedAnswers.map(({ qId, choice }) =>
+    db
+      .prepare(
+        `INSERT INTO quiz_answers (pairing_id, agent_id, source, question_id, choice, created_at)
+         SELECT ?, ?, 'human', ?, ?, ?
+         WHERE EXISTS (
+           SELECT 1 FROM pairings
+           WHERE id = ? AND status = 'ready_for_humans' AND ${col} IS NULL
+         )`,
+      )
+      .bind(pairing.id, agent.id, qId, choice, now, pairing.id),
+  )
+  batchStatements.push(
+    db
+      .prepare(`UPDATE pairings SET ${col} = ? WHERE id = ? AND status = 'ready_for_humans' AND ${col} IS NULL`)
+      .bind(now, pairing.id),
+  )
+  const batchResults = await db.batch(batchStatements)
+  const updateResult = batchResults[batchResults.length - 1]
+  if (Number(updateResult?.meta?.changes ?? 0) === 0) {
+    throw new ProtocolError(409, 'Human answers already submitted')
+  }
 
   const updated = await db.prepare('SELECT * FROM pairings WHERE id = ?').bind(pairing.id).first<PairingRow>()
-  if (updated && updated.human_a_submitted_at && updated.human_b_submitted_at && updated.status !== 'revealed') {
+  if (updated && updated.human_a_submitted_at && updated.human_b_submitted_at && updated.status === 'ready_for_humans') {
     await db
-      .prepare(`UPDATE pairings SET status = 'revealed', revealed_at = ? WHERE id = ?`)
+      .prepare(
+        `UPDATE pairings
+         SET status = 'revealed', revealed_at = ?
+         WHERE id = ? AND status = 'ready_for_humans'
+           AND human_a_submitted_at IS NOT NULL AND human_b_submitted_at IS NOT NULL`,
+      )
       .bind(now, pairing.id)
       .run()
   }
@@ -643,9 +750,20 @@ export async function postAnchorNote(
     throw new ProtocolError(409, 'Notes unlock after both humans finish the double-blind quiz')
   }
 
-  const trimmed = bodyText.trim().slice(0, 240)
+  const trimmed = bodyText.trim()
   if (!questionId || !trimmed) {
     throw new ProtocolError(400, 'question_id and body are required')
+  }
+  if (trimmed.length > 240) {
+    throw new ProtocolError(400, `body must be at most 240 characters (received ${trimmed.length})`)
+  }
+
+  const ownedQuestion = await db
+    .prepare('SELECT id FROM questions WHERE id = ? AND agent_id IN (?, ?)')
+    .bind(questionId, pairing.agent_a_id, pairing.agent_b_id)
+    .first<{ id: string }>()
+  if (!ownedQuestion) {
+    throw new ProtocolError(400, 'question_id does not belong to this pairing')
   }
 
   const pii = scanPii(trimmed)
@@ -840,7 +958,7 @@ export async function pickDrawWord(
     )
   }
 
-  const pii = scanPii([word, ...decoys].join(' '))
+  const pii = scanPiiFields([word, ...decoys])
   if (!pii.clean) throw new ProtocolError(400, 'Subtext or decoys rejected by PII guard', pii.findings)
 
   const shuffled = buildShuffledSubtextOptions(word, decoys)
@@ -1026,42 +1144,49 @@ export async function guessDrawing(
 
   const now = new Date().toISOString()
 
+  let incrementOnReveal = true
   if (!shouldReveal) {
     const attemptRes = await db
       .prepare(
         `UPDATE draw_rounds
-         SET guess_attempts = ?, last_guess = ?
+         SET guess_attempts = guess_attempts + 1, last_guess = ?
          WHERE id = ? AND status = 'awaiting_guess'`,
       )
-      .bind(attempts, recordedGuess, round.id)
+      .bind(recordedGuess, round.id)
       .run()
     if (Number(attemptRes.meta?.changes ?? 0) === 0) {
       const latest = await db.prepare('SELECT * FROM draw_rounds WHERE id = ?').bind(round.id).first<DrawRoundRow>()
       if (latest && latest.status === 'revealed') return buildRevealedPayload(latest)
       throw new ProtocolError(409, 'Round is no longer awaiting a guess')
     }
-    return {
-      matched: false,
-      revealed: false,
-      attempts_remaining: MAX_GUESS_ATTEMPTS - attempts,
-      secret_word: null,
-      correct_option: null,
-      chosen_option: null,
-      subtext_options: subtextOptions,
-      image_url: round.svg_markup ? `${origin.replace(/\/+$/, '')}/img/${round.id}.svg` : null,
-      game_completed: false,
-      next_round: null,
+    const afterAttempt = await db.prepare('SELECT * FROM draw_rounds WHERE id = ?').bind(round.id).first<DrawRoundRow>()
+    if (!afterAttempt) throw new ProtocolError(404, 'Draw round not found')
+    if (afterAttempt.status === 'revealed') return buildRevealedPayload(afterAttempt)
+    if (afterAttempt.guess_attempts < MAX_GUESS_ATTEMPTS) {
+      return {
+        matched: false,
+        revealed: false,
+        attempts_remaining: Math.max(0, MAX_GUESS_ATTEMPTS - afterAttempt.guess_attempts),
+        secret_word: null,
+        correct_option: null,
+        chosen_option: null,
+        subtext_options: subtextOptions,
+        image_url: round.svg_markup ? `${origin.replace(/\/+$/, '')}/img/${round.id}.svg` : null,
+        game_completed: false,
+        next_round: null,
+      }
     }
+    incrementOnReveal = false
   }
 
   const revealStmt = db
     .prepare(
       `UPDATE draw_rounds
-       SET guess_attempts = ?, last_guess = ?, guessed_correctly = ?,
+       SET guess_attempts = ${incrementOnReveal ? 'guess_attempts + 1' : 'guess_attempts'}, last_guess = ?, guessed_correctly = ?,
            status = 'revealed', reaction = ?, revealed_at = ?
        WHERE id = ? AND status = 'awaiting_guess'`,
     )
-    .bind(attempts, recordedGuess, matched ? 1 : 0, reaction ?? null, now, round.id)
+    .bind(recordedGuess, matched ? 1 : 0, reaction ?? null, now, round.id)
 
   const batchStatements: D1PreparedStatement[] = [revealStmt]
 

@@ -145,11 +145,21 @@ export function buildAgentSyncReport(
 
   let calibrationNote: string | null = null
   if (mismatches.length > 0) {
-    const lines = mismatches.map(
-      (m, i) =>
-        `${i + 1}. 题目「${m.prompt}」：Agent 猜「${m.agentChoiceText}」，真人亲选「${m.humanChoiceText}」`,
-    )
-    calibrationNote = `以下 ${mismatches.length} 题与你的真实选择存在偏差，可顺手更新你对主人的记忆：\n${lines.join('\n')}`
+    const isEnglish = !/[\u4e00-\u9fff]/.test(questions.map((q) => q.prompt).join(' '))
+    if (isEnglish) {
+      const lines = mismatches.map(
+        (m, i) =>
+          `${i + 1}. "${m.prompt}": your AI guessed "${m.agentChoiceText}", you picked "${m.humanChoiceText}"`,
+      )
+      const countLabel = mismatches.length === 1 ? '1 question' : `${mismatches.length} questions`
+      calibrationNote = `Your AI missed ${countLabel} compared to your real picks — worth updating its memory of you:\n${lines.join('\n')}`
+    } else {
+      const lines = mismatches.map(
+        (m, i) =>
+          `${i + 1}. 题目「${m.prompt}」：Agent 猜「${m.agentChoiceText}」，真人亲选「${m.humanChoiceText}」`,
+      )
+      calibrationNote = `以下 ${mismatches.length} 题与你的真实选择存在偏差，可顺手更新你对主人的记忆：\n${lines.join('\n')}`
+    }
   }
 
   return {

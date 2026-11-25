@@ -105,24 +105,140 @@ async function dispatchToolCall(
   }
 }
 
+async function handleRpcItem(
+  db: D1Database,
+  origin: string,
+  headerToken: string | null,
+  raw: unknown,
+): Promise<{ status?: 200 | 400 | 404; payload: Record<string, unknown> | null }> {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return { status: 400, payload: rpcError(null, -32600, 'Invalid JSON-RPC request') }
+  }
+  const req = raw as JsonRpcRequest
+  if (typeof req.method !== 'string') {
+    if (req.id === undefined) {
+      return { payload: null }
+    }
+    return { status: 400, payload: rpcError(req.id, -32600, 'Invalid JSON-RPC request') }
+  }
+
+  if (req.method.startsWith('notifications/')) {
+    return { payload: null }
+  }
+
+  if (req.method === 'initialize') {
+    return {
+      payload: rpcResult(req.id, {
+        protocolVersion: PROTOCOL_VERSION,
+        capabilities: {
+          tools: {},
+          resources: {},
+        },
+        serverInfo: {
+          name: 'kindred',
+          version: '2.0.0',
+        },
+      }),
+    }
+  }
+
+  if (req.method === 'ping') {
+    return { payload: rpcResult(req.id, {}) }
+  }
+
+  if (req.method === 'tools/list') {
+    return {
+      payload: rpcResult(req.id, {
+        tools: KINDRED_TOOLS.map((t) => ({
+          name: t.name,
+          title: t.title,
+          description: t.description,
+          inputSchema: t.inputSchema,
+          annotations: {
+            readOnlyHint: t.readOnlyHint,
+          },
+        })),
+      }),
+    }
+  }
+
+  if (req.method === 'resources/list') {
+    return {
+      payload: rpcResult(req.id, {
+        resources: [
+          {
+            uri: 'kindred://skill',
+            name: 'Kindred Agent Protocol',
+            mimeType: 'text/markdown',
+          },
+        ],
+      }),
+    }
+  }
+
+  if (req.method === 'resources/read') {
+    const uri = typeof req.params?.uri === 'string' ? req.params.uri : ''
+    if (uri !== 'kindred://skill') {
+      return { status: 400, payload: rpcError(req.id, -32602, `Unknown resource: ${uri}`) }
+    }
+    return {
+      payload: rpcResult(req.id, {
+        contents: [
+          {
+            uri: 'kindred://skill',
+            mimeType: 'text/markdown',
+            text: renderSkillMarkdown(origin),
+          },
+        ],
+      }),
+    }
+  }
+
+  if (req.method === 'tools/call') {
+    const name = typeof req.params?.name === 'string' ? req.params.name : ''
+    const args =
+      req.params?.arguments && typeof req.params.arguments === 'object'
+        ? (req.params.arguments as Record<string, unknown>)
+        : {}
+
+    try {
+      const payload = await dispatchToolCall(db, origin, headerToken, name, args)
+      return {
+        payload: rpcResult(req.id, {
+          content: [{ type: 'text', text: JSON.stringify(payload, null, 2) }],
+          structuredContent: payload,
+          isError: false,
+        }),
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Tool call failed'
+      const details = err instanceof ProtocolError ? err.details : undefined
+      return {
+        payload: rpcResult(req.id, {
+          content: [{ type: 'text', text: JSON.stringify({ error: message, details }) }],
+          isError: true,
+        }),
+      }
+    }
+  }
+
+  if (req.id === undefined) {
+    return { payload: null }
+  }
+  return { status: 404, payload: rpcError(req.id, -32601, `Method not found: ${req.method}`) }
+}
+
 export function createMcpRoutes() {
   const app = new Hono<{ Bindings: Env }>()
 
   app.get('/', (c) => {
-    const origin = new URL(c.req.url).origin
-    return c.json({
-      name: 'kindred',
-      transport: 'streamable-http',
-      protocolVersion: PROTOCOL_VERSION,
-      endpoint: `${origin}/mcp`,
-      skill: `${origin}/skill.md`,
-      tools: KINDRED_TOOLS.map((t) => t.name),
-    })
+    c.header('Allow', 'POST, OPTIONS')
+    return c.text('Method Not Allowed: send JSON-RPC requests via POST /mcp', 405)
   })
 
   app.post('/', async (c) => {
-    const req = await c.req.json<JsonRpcRequest>().catch(() => null)
-    if (!req || typeof req !== 'object' || typeof req.method !== 'string') {
+    const raw = await c.req.json<unknown>().catch(() => null)
+    if (raw === null || typeof raw !== 'object') {
       return c.json(rpcError(null, -32600, 'Invalid JSON-RPC request'), 400)
     }
 
@@ -130,107 +246,28 @@ export function createMcpRoutes() {
     const origin = url.origin
     const headerToken = extractBearerToken(c.req.header('Authorization')) ?? url.searchParams.get('token')
 
-    if (req.method === 'notifications/initialized') {
+    if (Array.isArray(raw)) {
+      if (raw.length === 0) {
+        return c.json(rpcError(null, -32600, 'Invalid empty JSON-RPC batch'), 400)
+      }
+      const responses: Array<Record<string, unknown>> = []
+      for (const item of raw) {
+        const res = await handleRpcItem(c.env.DB, origin, headerToken, item)
+        if (res.payload !== null) {
+          responses.push(res.payload)
+        }
+      }
+      if (responses.length === 0) {
+        return c.body(null, 202)
+      }
+      return c.json(responses)
+    }
+
+    const single = await handleRpcItem(c.env.DB, origin, headerToken, raw)
+    if (single.payload === null) {
       return c.body(null, 202)
     }
-
-    if (req.method === 'initialize') {
-      return c.json(
-        rpcResult(req.id, {
-          protocolVersion: PROTOCOL_VERSION,
-          capabilities: {
-            tools: {},
-            resources: {},
-          },
-          serverInfo: {
-            name: 'kindred',
-            version: '2.0.0',
-          },
-        }),
-      )
-    }
-
-    if (req.method === 'ping') {
-      return c.json(rpcResult(req.id, {}))
-    }
-
-    if (req.method === 'tools/list') {
-      return c.json(
-        rpcResult(req.id, {
-          tools: KINDRED_TOOLS.map((t) => ({
-            name: t.name,
-            title: t.title,
-            description: t.description,
-            inputSchema: t.inputSchema,
-            annotations: {
-              readOnlyHint: t.readOnlyHint,
-            },
-          })),
-        }),
-      )
-    }
-
-    if (req.method === 'resources/list') {
-      return c.json(
-        rpcResult(req.id, {
-          resources: [
-            {
-              uri: 'kindred://skill',
-              name: 'Kindred Agent Protocol',
-              mimeType: 'text/markdown',
-            },
-          ],
-        }),
-      )
-    }
-
-    if (req.method === 'resources/read') {
-      const uri = typeof req.params?.uri === 'string' ? req.params.uri : ''
-      if (uri !== 'kindred://skill') {
-        return c.json(rpcError(req.id, -32602, `Unknown resource: ${uri}`), 400)
-      }
-      return c.json(
-        rpcResult(req.id, {
-          contents: [
-            {
-              uri: 'kindred://skill',
-              mimeType: 'text/markdown',
-              text: renderSkillMarkdown(origin),
-            },
-          ],
-        }),
-      )
-    }
-
-    if (req.method === 'tools/call') {
-      const name = typeof req.params?.name === 'string' ? req.params.name : ''
-      const args =
-        req.params?.arguments && typeof req.params.arguments === 'object'
-          ? (req.params.arguments as Record<string, unknown>)
-          : {}
-
-      try {
-        const payload = await dispatchToolCall(c.env.DB, origin, headerToken, name, args)
-        return c.json(
-          rpcResult(req.id, {
-            content: [{ type: 'text', text: JSON.stringify(payload, null, 2) }],
-            structuredContent: payload,
-            isError: false,
-          }),
-        )
-      } catch (err) {
-        const message = err instanceof Error ? err.message : 'Tool call failed'
-        const details = err instanceof ProtocolError ? err.details : undefined
-        return c.json(
-          rpcResult(req.id, {
-            content: [{ type: 'text', text: JSON.stringify({ error: message, details }) }],
-            isError: true,
-          }),
-        )
-      }
-    }
-
-    return c.json(rpcError(req.id, -32601, `Method not found: ${req.method}`), 404)
+    return c.json(single.payload, single.status ?? 200)
   })
 
   return app

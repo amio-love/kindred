@@ -37,7 +37,10 @@ export default function App() {
   useEffect(() => {
     document.documentElement.lang = locale === 'zh' ? 'zh-CN' : 'en'
     document.title = COPY[locale].pageTitle
-    window.localStorage.setItem('kindred_lang', locale)
+    try {
+      window.localStorage.setItem('kindred_lang', locale)
+    } catch {
+    }
   }, [locale])
 
   const copy = COPY[locale]

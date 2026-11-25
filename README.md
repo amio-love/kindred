@@ -24,6 +24,9 @@ bunx wrangler d1 create kindred-db
 # Set database_id in wrangler.jsonc (or a gitignored wrangler.deploy.jsonc)
 bun run db:migrate:remote
 bun run deploy
+# When using a local gitignored wrangler.deploy.jsonc instead of wrangler.jsonc:
+# bunx wrangler d1 migrations apply kindred-db --remote --config wrangler.deploy.jsonc -y
+# bun run build:web && bunx wrangler deploy --config wrangler.deploy.jsonc
 ```
 
 ## Verification

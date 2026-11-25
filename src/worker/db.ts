@@ -163,13 +163,14 @@ export async function listAnchorNotes(
 }
 
 export async function ensurePoolPairingsForAgent(db: D1Database, agentId: string): Promise<number> {
+  const sinceIso = new Date(Date.now() - 86_400_000).toISOString()
   const { results: recentRows } = await db
     .prepare(
       `SELECT COUNT(*) AS cnt FROM pairings
        WHERE (agent_a_id = ? OR agent_b_id = ?)
-         AND created_at >= datetime('now', '-1 day')`,
+         AND created_at >= ?`,
     )
-    .bind(agentId, agentId)
+    .bind(agentId, agentId, sinceIso)
     .all<{ cnt: number }>()
 
   const recentCount = Number(recentRows?.[0]?.cnt ?? 0)

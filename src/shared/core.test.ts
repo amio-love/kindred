@@ -6,7 +6,7 @@ import {
   strokesToStaticSvg,
   validateStrokes,
 } from './drawing'
-import { scanPii } from './pii'
+import { scanPii, scanPiiFields } from './pii'
 import {
   buildAgentSyncReport,
   evaluateDirection,
@@ -22,17 +22,24 @@ describe('PII boundary scanner', () => {
       '电话 13800138000',
       '电话 138 0013 8000',
       '电话 +8613800138000',
+      '电话 138\u200b0013\u200b8000',
       '手机 １３８００１３８０００',
       'whatsapp +447911123456',
       'call +1 415-555-0199',
+      'text 415-555-0199',
+      'call (415) 555-0199',
       '主页 https://example.org/me',
       '看看我的站点 kindred.dev/profile',
       '频道 t.me/alice/',
       '身份证 110101199001011234',
       '加我微信：my_handle_99',
+      '我的微信号是kindred_99',
       '加微信号:kindred_99',
       '加微信 kindred_99',
       '加我微信kindred_99',
+      '加v：kindred99',
+      '加V kindred99',
+      'weixin: kindred99',
       'wx: my_id_01',
       'wx kindred_99',
       'line id alice_99',
@@ -47,11 +54,18 @@ describe('PII boundary scanner', () => {
     }
   })
 
-  test('allows ordinary Chinese and English tastes without false positives on substrings like ins or tg', () => {
+  test('allows ordinary Chinese and English tastes without false positives on substrings, media terms, years, or separate fields', () => {
     const allowed = [
       '挑一款新的洗发水时，先翻背面逐项查配方成分表，避开硅油和植物油。',
       '睡前刷小红书看露营攻略，但从不发帖。',
+      '睡前会刷小红书 vlog 吗？',
+      '周末拍一条抖音vlog记录城市散步。',
       '微信2024年度报告里全是深夜群聊。',
+      '微信 2024年度报告里全是深夜群聊。',
+      'Do you miss Twitter 2012 vibes?',
+      'Instagram: never',
+      'I prefer ASP.NET over legacy scripts.',
+      'Walking 200 300 4000 steps after dinner.',
       'I would rather read instead of sleeping early.',
       'Revenge insomnia and midnight playlists.',
       'Instant click when someone shares quiet insight.',
@@ -62,6 +76,7 @@ describe('PII boundary scanner', () => {
     for (const sample of allowed) {
       assert.equal(scanPii(sample).clean, true, `Unexpected PII false positive on: ${sample}`)
     }
+    assert.equal(scanPiiFields(['聊天工具', '平时最常用哪个？', '微信', 'Telegram', 'Discord', '短信']).clean, true)
   })
 })
 
@@ -172,6 +187,28 @@ describe('Option shuffling and paired matching gate', () => {
     assert.equal(report.mismatches.length, 1)
     assert.equal(report.mismatches[0]?.questionId, 'q_1')
     assert.ok(report.calibrationNote?.includes('便利店'))
+
+    const enQuestions: StoredQuestion[] = [
+      {
+        id: 'eq_1',
+        position: 1,
+        dimension: 'Habits',
+        prompt: 'Late-night snack choice?',
+        options: { A: 'Ramen', B: 'Tea', C: 'Toast', D: 'Nothing' },
+        ownerChoice: 'B',
+        agentPredicted: 'B',
+        confidence: 'high',
+        starred: false,
+      },
+    ]
+    const enReport = buildAgentSyncReport(
+      enQuestions,
+      [{ questionId: 'eq_1', choice: 'B' }],
+      [{ questionId: 'eq_1', choice: 'A' }],
+    )
+    assert.ok(enReport.calibrationNote)
+    assert.equal(/[\u4e00-\u9fff]/.test(enReport.calibrationNote), false)
+    assert.ok(enReport.calibrationNote.includes('Tea'))
   })
 })
 

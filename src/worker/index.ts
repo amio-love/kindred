@@ -108,6 +108,10 @@ app.route('/mcp', createMcpRoutes())
 app.route('/api', createProtocolRoutes())
 
 app.all('*', async (c) => {
+  const pathname = new URL(c.req.url).pathname
+  if (pathname.startsWith('/skill.md') && pathname !== '/skill.md') {
+    return c.notFound()
+  }
   return c.env.ASSETS.fetch(c.req.raw)
 })
 
