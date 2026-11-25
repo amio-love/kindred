@@ -237,7 +237,12 @@ export function createMcpRoutes() {
   })
 
   app.post('/', async (c) => {
-    const raw = await c.req.json<unknown>().catch(() => null)
+    let raw: unknown
+    try {
+      raw = JSON.parse(await c.req.text())
+    } catch {
+      return c.json(rpcError(null, -32700, 'Parse error'), 400)
+    }
     if (raw === null || typeof raw !== 'object') {
       return c.json(rpcError(null, -32600, 'Invalid JSON-RPC request'), 400)
     }

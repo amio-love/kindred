@@ -45,7 +45,7 @@ const HOSTS_BY_LOCALE: Record<Locale, readonly HostItem[]> = {
     },
     {
       id: 'qwen',
-      name: '通义千问',
+      name: '千问',
       icon: '/icons/qwen.svg',
       accent: '#6366f1',
       glow: 'rgba(99, 102, 241, 0.3)',
@@ -165,8 +165,11 @@ export default function HostShowcase({
 }: HostShowcaseProps) {
   const hosts = HOSTS_BY_LOCALE[locale]
   const [activeIdx, setActiveIdx] = useState(0)
-  const [paused, setPaused] = useState(false)
+  const [hovered, setHovered] = useState(false)
+  const [focused, setFocused] = useState(false)
+  const [locked, setLocked] = useState(false)
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([])
+  const paused = hovered || focused || locked
 
   useEffect(() => {
     setActiveIdx(0)
@@ -201,7 +204,7 @@ export default function HostShowcase({
     }
     if (nextIdx === null) return
     event.preventDefault()
-    setPaused(true)
+    setLocked(true)
     setActiveIdx(nextIdx)
     tabRefs.current[nextIdx]?.focus()
   }
@@ -213,12 +216,12 @@ export default function HostShowcase({
         ['--host-accent' as string]: active.accent,
         ['--host-glow' as string]: active.glow,
       }}
-      onMouseEnter={() => setPaused(true)}
-      onMouseLeave={() => setPaused(false)}
-      onFocus={() => setPaused(true)}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      onFocus={() => setFocused(true)}
       onBlur={(event) => {
         if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
-          setPaused(false)
+          setFocused(false)
         }
       }}
     >
@@ -265,7 +268,7 @@ export default function HostShowcase({
                 style={isCurrent ? { borderColor: host.accent } : undefined}
                 onClick={() => {
                   setActiveIdx(idx)
-                  setPaused(true)
+                  setLocked(true)
                 }}
                 onKeyDown={(event) => handleTabKeyDown(event, idx)}
               >

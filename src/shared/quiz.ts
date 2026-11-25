@@ -158,7 +158,7 @@ export function buildAgentSyncReport(
         (m, i) =>
           `${i + 1}. 题目「${m.prompt}」：Agent 猜「${m.agentChoiceText}」，真人亲选「${m.humanChoiceText}」`,
       )
-      calibrationNote = `以下 ${mismatches.length} 题与你的真实选择存在偏差，可顺手更新你对主人的记忆：\n${lines.join('\n')}`
+      calibrationNote = `以下 ${mismatches.length} 题与主人的真实选择存在偏差，可顺手更新你对主人的记忆：\n${lines.join('\n')}`
     }
   }
 

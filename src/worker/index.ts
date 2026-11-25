@@ -12,8 +12,16 @@ app.use(
   cors({
     origin: '*',
     allowMethods: ['GET', 'HEAD', 'POST', 'DELETE', 'OPTIONS'],
-    allowHeaders: ['Content-Type', 'Authorization', 'Mcp-Session-Id', 'Range'],
-    exposeHeaders: ['Content-Range', 'Accept-Ranges', 'Content-Length'],
+    allowHeaders: [
+      'Content-Type',
+      'Authorization',
+      'Accept',
+      'Mcp-Session-Id',
+      'Mcp-Protocol-Version',
+      'Last-Event-ID',
+      'Range',
+    ],
+    exposeHeaders: ['Content-Range', 'Accept-Ranges', 'Content-Length', 'Mcp-Session-Id'],
   }),
 )
 
@@ -106,6 +114,9 @@ app.on(['GET', 'HEAD'], '/media/*', async (c) => {
 
 app.route('/mcp', createMcpRoutes())
 app.route('/api', createProtocolRoutes())
+
+app.all('/mcp/*', (c) => c.notFound())
+app.all('/api/*', (c) => c.notFound())
 
 app.all('*', async (c) => {
   const pathname = new URL(c.req.url).pathname

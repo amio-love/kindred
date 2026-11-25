@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import type { CopyBundle } from './i18n'
 
 interface VisualStoryProps {
@@ -12,11 +12,16 @@ const OPTION_LETTERS = ['A', 'B', 'C', 'D'] as const
 
 export default function VisualStory({ copy, copied, onCopy }: VisualStoryProps) {
   const [picks, setPicks] = useState<Record<string, number>>({})
+  const firstOptRefs = useRef<Record<string, HTMLButtonElement | null>>({})
+  const retryBtnRefs = useRef<Record<string, HTMLButtonElement | null>>({})
 
   const handlePick = (cardId: string, optionIdx: number) => {
     setPicks((prev) => {
       if (prev[cardId] !== undefined) return prev
       return { ...prev, [cardId]: optionIdx }
+    })
+    window.requestAnimationFrame(() => {
+      retryBtnRefs.current[cardId]?.focus()
     })
   }
 
@@ -25,6 +30,9 @@ export default function VisualStory({ copy, copied, onCopy }: VisualStoryProps) 
       const next = { ...prev }
       delete next[cardId]
       return next
+    })
+    window.requestAnimationFrame(() => {
+      firstOptRefs.current[cardId]?.focus()
     })
   }
 
@@ -72,6 +80,13 @@ export default function VisualStory({ copy, copied, onCopy }: VisualStoryProps) 
                     return (
                       <button
                         key={optText}
+                        ref={
+                          idx === 0
+                            ? (el) => {
+                                firstOptRefs.current[card.id] = el
+                              }
+                            : undefined
+                        }
                         type="button"
                         disabled={hasPicked}
                         className={`subtext-opt ${stateClass}`}
@@ -101,6 +116,9 @@ export default function VisualStory({ copy, copied, onCopy }: VisualStoryProps) 
                         {hit ? card.hitNote : copy.surfaceRetryNote}
                       </span>
                       <button
+                        ref={(el) => {
+                          retryBtnRefs.current[card.id] = el
+                        }}
                         type="button"
                         className="subtext-retry-btn"
                         onClick={() => handleReset(card.id)}

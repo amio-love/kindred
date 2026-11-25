@@ -187,10 +187,15 @@ export async function ensurePoolPairingsForAgent(db: D1Database, agentId: string
            WHERE (p.agent_a_id = a.id AND p.agent_b_id = ?)
               OR (p.agent_a_id = ? AND p.agent_b_id = a.id)
          )
+         AND (
+           SELECT COUNT(*) FROM pairings p2
+           WHERE (p2.agent_a_id = a.id OR p2.agent_b_id = a.id)
+             AND p2.created_at >= ?
+         ) < 3
        ORDER BY a.last_seen_at DESC
        LIMIT ?`,
     )
-    .bind(agentId, agentId, agentId, remainingSlots)
+    .bind(agentId, agentId, agentId, sinceIso, remainingSlots)
     .all<{ id: string }>()
 
   let created = 0

@@ -240,22 +240,88 @@ export async function publishQuiz(
   }
 }
 
+async function reconcilePairingStatus(db: D1Database, pairing: PairingRow): Promise<PairingRow> {
+  if (pairing.status === 'pending_agents' && pairing.agent_a_submitted_at && pairing.agent_b_submitted_at) {
+    const [qsA, qsB, ansA, ansB] = await Promise.all([
+      listQuestions(db, pairing.agent_a_id),
+      listQuestions(db, pairing.agent_b_id),
+      listAnswers(db, pairing.id, pairing.agent_a_id, 'agent'),
+      listAnswers(db, pairing.id, pairing.agent_b_id, 'agent'),
+    ])
+    const dirA = evaluateDirection(qsB, ansA)
+    const dirB = evaluateDirection(qsA, ansB)
+    const computedStatus: PairingStatus = passesAgentMatchGate(dirA, dirB) ? 'ready_for_humans' : 'rejected'
+    await db
+      .prepare(
+        `UPDATE pairings
+         SET status = ?
+         WHERE id = ? AND status = 'pending_agents'
+           AND agent_a_submitted_at IS NOT NULL AND agent_b_submitted_at IS NOT NULL`,
+      )
+      .bind(computedStatus, pairing.id)
+      .run()
+    const fresh = await db.prepare('SELECT * FROM pairings WHERE id = ?').bind(pairing.id).first<PairingRow>()
+    if (fresh) return fresh
+  }
+  if (pairing.status === 'ready_for_humans' && pairing.human_a_submitted_at && pairing.human_b_submitted_at) {
+    const now = new Date().toISOString()
+    await db
+      .prepare(
+        `UPDATE pairings
+         SET status = 'revealed', revealed_at = ?
+         WHERE id = ? AND status = 'ready_for_humans'
+           AND human_a_submitted_at IS NOT NULL AND human_b_submitted_at IS NOT NULL`,
+      )
+      .bind(now, pairing.id)
+      .run()
+    const fresh = await db.prepare('SELECT * FROM pairings WHERE id = ?').bind(pairing.id).first<PairingRow>()
+    if (fresh) return fresh
+  }
+  return pairing
+}
+
 export async function getInbox(db: D1Database, origin: string, token: string | null | undefined) {
   const agent = await requireAgent(db, token)
   if (agent.quiz_ready) {
     await ensurePoolPairingsForAgent(db, agent.id)
   }
 
-  const { results: pairingRows } = await db
-    .prepare(
-      `SELECT * FROM pairings
-       WHERE (agent_a_id = ? OR agent_b_id = ?)
-         AND status IN ('pending_agents', 'ready_for_humans', 'revealed')
-       ORDER BY created_at DESC
-       LIMIT 12`,
-    )
-    .bind(agent.id, agent.id)
-    .all<PairingRow>()
+  const [pendingRes, readyRes, revealedRes] = await Promise.all([
+    db
+      .prepare(
+        `SELECT * FROM pairings
+         WHERE (agent_a_id = ? OR agent_b_id = ?) AND status = 'pending_agents'
+         ORDER BY created_at DESC
+         LIMIT 12`,
+      )
+      .bind(agent.id, agent.id)
+      .all<PairingRow>(),
+    db
+      .prepare(
+        `SELECT * FROM pairings
+         WHERE (agent_a_id = ? OR agent_b_id = ?) AND status = 'ready_for_humans'
+         ORDER BY created_at DESC
+         LIMIT 20`,
+      )
+      .bind(agent.id, agent.id)
+      .all<PairingRow>(),
+    db
+      .prepare(
+        `SELECT * FROM pairings
+         WHERE (agent_a_id = ? OR agent_b_id = ?) AND status = 'revealed'
+         ORDER BY COALESCE(revealed_at, created_at) DESC
+         LIMIT 20`,
+      )
+      .bind(agent.id, agent.id)
+      .all<PairingRow>(),
+  ])
+
+  const pairingMap = new Map<string, PairingRow>()
+  for (const row of [...(revealedRes.results ?? []), ...(readyRes.results ?? []), ...(pendingRes.results ?? [])]) {
+    const reconciled = await reconcilePairingStatus(db, row)
+    pairingMap.set(reconciled.id, reconciled)
+  }
+  const pairingRows = Array.from(pairingMap.values())
 
   const pendingQuizzes: Array<{
     pairing_id: string
@@ -457,43 +523,47 @@ export async function submitAgentAnswers(
       )
       .bind(pairing.id, agent.id, qId, choice, now, pairing.id),
   )
+  const colUpdateIdx = batchStatements.length
   batchStatements.push(
     db
       .prepare(`UPDATE pairings SET ${col} = ? WHERE id = ? AND status = 'pending_agents' AND ${col} IS NULL`)
       .bind(now, pairing.id),
   )
+
+  const partnerAlreadySubmitted = isA ? Boolean(pairing.agent_b_submitted_at) : Boolean(pairing.agent_a_submitted_at)
+  if (partnerAlreadySubmitted) {
+    const [selfQs, partnerAgentAnswers] = await Promise.all([
+      listQuestions(db, agent.id),
+      listAnswers(db, pairing.id, partnerId, 'agent'),
+    ])
+    const dirSelf = evaluateDirection(
+      partnerQs,
+      parsedAnswers.map(({ qId, choice }) => ({ questionId: qId, choice: choice as AnswerEntry['choice'] })),
+    )
+    const dirPartner = evaluateDirection(selfQs, partnerAgentAnswers)
+    const computedStatus: PairingStatus = passesAgentMatchGate(dirSelf, dirPartner) ? 'ready_for_humans' : 'rejected'
+    batchStatements.push(
+      db
+        .prepare(
+          `UPDATE pairings
+           SET status = ?
+           WHERE id = ? AND status = 'pending_agents'
+             AND agent_a_submitted_at IS NOT NULL AND agent_b_submitted_at IS NOT NULL`,
+        )
+        .bind(computedStatus, pairing.id),
+    )
+  }
+
   const batchResults = await db.batch(batchStatements)
-  const updateResult = batchResults[batchResults.length - 1]
+  const updateResult = batchResults[colUpdateIdx]
   if (Number(updateResult?.meta?.changes ?? 0) === 0) {
     throw new ProtocolError(409, 'Agent screening answers already submitted')
   }
   const saved = parsedAnswers.length
 
-  const updated = await db.prepare('SELECT * FROM pairings WHERE id = ?').bind(pairing.id).first<PairingRow>()
-  let nextStatus: PairingStatus = updated?.status ?? 'pending_agents'
-
-  if (updated && updated.status === 'pending_agents' && updated.agent_a_submitted_at && updated.agent_b_submitted_at) {
-    const [qsA, qsB, ansA, ansB] = await Promise.all([
-      listQuestions(db, updated.agent_a_id),
-      listQuestions(db, updated.agent_b_id),
-      listAnswers(db, updated.id, updated.agent_a_id, 'agent'),
-      listAnswers(db, updated.id, updated.agent_b_id, 'agent'),
-    ])
-    const dirA = evaluateDirection(qsB, ansA)
-    const dirB = evaluateDirection(qsA, ansB)
-    const computedStatus: PairingStatus = passesAgentMatchGate(dirA, dirB) ? 'ready_for_humans' : 'rejected'
-    await db
-      .prepare(
-        `UPDATE pairings
-         SET status = ?
-         WHERE id = ? AND status = 'pending_agents'
-           AND agent_a_submitted_at IS NOT NULL AND agent_b_submitted_at IS NOT NULL`,
-      )
-      .bind(computedStatus, updated.id)
-      .run()
-    const canonical = await db.prepare('SELECT status FROM pairings WHERE id = ?').bind(updated.id).first<{ status: PairingStatus }>()
-    nextStatus = canonical?.status ?? computedStatus
-  }
+  const updatedRaw = await db.prepare('SELECT * FROM pairings WHERE id = ?').bind(pairing.id).first<PairingRow>()
+  const updated = updatedRaw ? await reconcilePairingStatus(db, updatedRaw) : null
+  const nextStatus: PairingStatus = updated?.status ?? 'pending_agents'
 
   return {
     pairing_id: pairing.id,
@@ -515,11 +585,12 @@ export async function getPairingReveal(
   pairingId: string,
 ) {
   const agent = await requireAgent(db, token)
-  const pairing = await db.prepare('SELECT * FROM pairings WHERE id = ?').bind(pairingId).first<PairingRow>()
-  if (!pairing) throw new ProtocolError(404, 'Pairing not found')
-  if (pairing.agent_a_id !== agent.id && pairing.agent_b_id !== agent.id) {
+  const rawPairing = await db.prepare('SELECT * FROM pairings WHERE id = ?').bind(pairingId).first<PairingRow>()
+  if (!rawPairing) throw new ProtocolError(404, 'Pairing not found')
+  if (rawPairing.agent_a_id !== agent.id && rawPairing.agent_b_id !== agent.id) {
     throw new ProtocolError(403, 'Not a participant of this pairing')
   }
+  const pairing = await reconcilePairingStatus(db, rawPairing)
 
   const isA = pairing.agent_a_id === agent.id
   const partnerId = isA ? pairing.agent_b_id : pairing.agent_a_id
@@ -643,11 +714,12 @@ export async function submitHumanAnswers(
   rawAnswers: unknown,
 ) {
   const agent = await requireAgent(db, token)
-  const pairing = await db.prepare('SELECT * FROM pairings WHERE id = ?').bind(pairingId).first<PairingRow>()
-  if (!pairing) throw new ProtocolError(404, 'Pairing not found')
-  if (pairing.agent_a_id !== agent.id && pairing.agent_b_id !== agent.id) {
+  const rawPairing = await db.prepare('SELECT * FROM pairings WHERE id = ?').bind(pairingId).first<PairingRow>()
+  if (!rawPairing) throw new ProtocolError(404, 'Pairing not found')
+  if (rawPairing.agent_a_id !== agent.id && rawPairing.agent_b_id !== agent.id) {
     throw new ProtocolError(403, 'Not a participant of this pairing')
   }
+  const pairing = await reconcilePairingStatus(db, rawPairing)
   if (pairing.status === 'revealed') {
     throw new ProtocolError(409, 'Pairing is already revealed; human answers are immutable')
   }
@@ -706,28 +778,24 @@ export async function submitHumanAnswers(
       )
       .bind(pairing.id, agent.id, qId, choice, now, pairing.id),
   )
+  const colUpdateIdx = batchStatements.length
   batchStatements.push(
     db
       .prepare(`UPDATE pairings SET ${col} = ? WHERE id = ? AND status = 'ready_for_humans' AND ${col} IS NULL`)
       .bind(now, pairing.id),
-  )
-  const batchResults = await db.batch(batchStatements)
-  const updateResult = batchResults[batchResults.length - 1]
-  if (Number(updateResult?.meta?.changes ?? 0) === 0) {
-    throw new ProtocolError(409, 'Human answers already submitted')
-  }
-
-  const updated = await db.prepare('SELECT * FROM pairings WHERE id = ?').bind(pairing.id).first<PairingRow>()
-  if (updated && updated.human_a_submitted_at && updated.human_b_submitted_at && updated.status === 'ready_for_humans') {
-    await db
+    db
       .prepare(
         `UPDATE pairings
          SET status = 'revealed', revealed_at = ?
          WHERE id = ? AND status = 'ready_for_humans'
            AND human_a_submitted_at IS NOT NULL AND human_b_submitted_at IS NOT NULL`,
       )
-      .bind(now, pairing.id)
-      .run()
+      .bind(now, pairing.id),
+  )
+  const batchResults = await db.batch(batchStatements)
+  const updateResult = batchResults[colUpdateIdx]
+  if (Number(updateResult?.meta?.changes ?? 0) === 0) {
+    throw new ProtocolError(409, 'Human answers already submitted')
   }
 
   return getPairingReveal(db, origin, token, pairing.id)
@@ -741,11 +809,12 @@ export async function postAnchorNote(
   bodyText: string,
 ) {
   const agent = await requireAgent(db, token)
-  const pairing = await db.prepare('SELECT * FROM pairings WHERE id = ?').bind(pairingId).first<PairingRow>()
-  if (!pairing) throw new ProtocolError(404, 'Pairing not found')
-  if (pairing.agent_a_id !== agent.id && pairing.agent_b_id !== agent.id) {
+  const rawPairing = await db.prepare('SELECT * FROM pairings WHERE id = ?').bind(pairingId).first<PairingRow>()
+  if (!rawPairing) throw new ProtocolError(404, 'Pairing not found')
+  if (rawPairing.agent_a_id !== agent.id && rawPairing.agent_b_id !== agent.id) {
     throw new ProtocolError(403, 'Not a participant of this pairing')
   }
+  const pairing = await reconcilePairingStatus(db, rawPairing)
   if (pairing.status !== 'revealed') {
     throw new ProtocolError(409, 'Notes unlock after both humans finish the double-blind quiz')
   }
@@ -791,11 +860,12 @@ export async function startDrawGame(
   pairingId: string,
 ) {
   const agent = await requireAgent(db, token)
-  const pairing = await db.prepare('SELECT * FROM pairings WHERE id = ?').bind(pairingId).first<PairingRow>()
-  if (!pairing) throw new ProtocolError(404, 'Pairing not found')
-  if (pairing.agent_a_id !== agent.id && pairing.agent_b_id !== agent.id) {
+  const rawPairing = await db.prepare('SELECT * FROM pairings WHERE id = ?').bind(pairingId).first<PairingRow>()
+  if (!rawPairing) throw new ProtocolError(404, 'Pairing not found')
+  if (rawPairing.agent_a_id !== agent.id && rawPairing.agent_b_id !== agent.id) {
     throw new ProtocolError(403, 'Not a participant of this pairing')
   }
+  const pairing = await reconcilePairingStatus(db, rawPairing)
   if (pairing.status !== 'revealed') {
     throw new ProtocolError(409, 'Complete the Phase 1 double-blind reveal before starting Draw & Guess')
   }
@@ -1100,6 +1170,7 @@ export async function guessDrawing(
     reaction = cleanedReaction
   }
 
+  const guesserLocale = giveUp ? await inferAgentLocale(db, agent.id) : 'zh'
   const attempts = round.guess_attempts + 1
   let matched = false
   let shouldReveal = false
@@ -1117,11 +1188,11 @@ export async function guessDrawing(
     }
     matched = !giveUp && normalizedChoice === round.correct_option
     shouldReveal = true
-    recordedGuess = giveUp ? '（跳过）' : normalizedChoice!
+    recordedGuess = giveUp ? (guesserLocale === 'en' ? '(skipped)' : '（跳过）') : normalizedChoice!
   } else if (giveUp) {
     matched = false
     shouldReveal = true
-    recordedGuess = '（放弃）'
+    recordedGuess = guesserLocale === 'en' ? '(gave up)' : '（放弃）'
   } else {
     const guess = guessRaw.trim()
     if (!guess) {
