@@ -215,7 +215,7 @@ const STRONG_HANDLE_CUES: readonly RegExp[] = [
 
 const BARE_CN_CONTENT_CUE_RE = new RegExp(`(?:${CN_CONTENT_PLATS})\\s*(?:是|为|叫|[:：=])\\s*${WRAP}$`, 'i')
 const CN_CONTACT_SOLICIT_RE =
-  /^(?:欢迎|可以|直接|随时|请|来)?(?:互关|互粉|回关|求关注|关注我|私信|私聊|找我|加我|滴滴|和我聊|联系我|搜我|是我的号|是我号)/
+  /^(?:欢迎|可以|直接|随时|请|来)?(?:互关|互粉|回关|求关注|关注我|私信我?|私聊我?|找我(?:聊|玩)?|加我(?:聊|玩)?|滴滴我?|和我聊聊?|联系我|搜我|是我的号|是我号)[吧呀啊哦哈啦~！!。]*$/
 
 function isBareContentHandleClause(after: string): boolean {
   const clause = (after.split(/(?<!\d)\.(?!\d)|[。!！?？;；]/, 1)[0] ?? '').trim()
@@ -316,8 +316,7 @@ export function scanPii(text: string): { clean: boolean; findings: PiiFinding[] 
         if (
           hasCueBefore(before, GENERAL_SHAPE_CUES) ||
           (strongShape && hasCueBefore(before, STRONG_HANDLE_CUES)) ||
-          (BARE_CN_CONTENT_CUE_RE.test(before) &&
-            (tok.includes('_') || isBareContentHandleClause(after))) ||
+          (BARE_CN_CONTENT_CUE_RE.test(before) && isBareContentHandleClause(after)) ||
           (TRAILING_BEFORE_RE.test(before) && TRAILING_AFTER_RE.test(after.slice(0, 40)))
         ) {
           findings.push({ category: 'social_handle', excerpt: tok.slice(0, 32) })

@@ -256,6 +256,8 @@ describe('PII boundary scanner', () => {
       '知乎：Ryzen9 和 Ryzen7 的 IPC',
       '知乎：Ryzen9 和 Ryzen7，聊聊它们的 IPC 差异',
       'B站：Windows11 的本地账号怎么设置',
+      'B站：x86_64 和 ARM64 哪个更省电？',
+      '知乎：ChatGPT4 和我聊数学时，为什么会算错？',
       '知乎：Ryzen9 和 Ryzen7 在 Windows 11 游戏实测',
       '我在书单上记了三本书的页数：\n320\n416\n1024',
       '我在书单上记了三本书的页数：\r320\r416\r1024',
