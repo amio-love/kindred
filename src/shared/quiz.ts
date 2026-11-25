@@ -1,156 +1,156 @@
 import type {
   AgentSyncMismatch,
   AgentSyncReport,
-  AnswerRecord,
-  DirectionMetrics,
+  AnswerEntry,
+  DirectionScore,
   OptionKey,
-  OptionMap,
-  QuestionRevealItem,
+  QuestionOptions,
   StoredQuestion,
 } from './types'
 
 export const OPTION_KEYS: readonly OptionKey[] = ['A', 'B', 'C', 'D']
 
-export const POOL_MIN_COVERAGE = 0.5
-export const POOL_MIN_HIT_RATE = 0.5
+export const MATCH_GATE = {
+  minCoverage: 0.5,
+  minHitRate: 0.55,
+  minAnswered: 2,
+} as const
+
+export function isOptionKey(value: unknown): value is OptionKey {
+  return value === 'A' || value === 'B' || value === 'C' || value === 'D'
+}
+
+export function isAnswerChoice(value: unknown): value is OptionKey | 'U' {
+  return isOptionKey(value) || value === 'U'
+}
 
 export function shuffleQuestionOptions(
-  options: OptionMap,
+  options: QuestionOptions,
   ownerChoice: OptionKey,
-  agentPredicted?: OptionKey,
-  randomSource?: () => number,
+  agentPredicted: OptionKey = ownerChoice,
+  rng: () => number = Math.random,
 ): {
-  options: OptionMap
+  options: QuestionOptions
   ownerChoice: OptionKey
-  agentPredicted: OptionKey | null
+  agentPredicted: OptionKey
 } {
-  const nextFloat =
-    randomSource ??
-    (() => {
-      const buf = new Uint32Array(1)
-      crypto.getRandomValues(buf)
-      return (buf[0] ?? 0) / 0x100000000
-    })
+  const entries: Array<{ oldKey: OptionKey; text: string }> = OPTION_KEYS.map((key) => ({
+    oldKey: key,
+    text: options[key].trim(),
+  }))
 
-  const order: OptionKey[] = ['A', 'B', 'C', 'D']
-  for (let i = order.length - 1; i > 0; i--) {
-    const j = Math.floor(nextFloat() * (i + 1))
-    const current = order[i]!
-    order[i] = order[j]!
-    order[j] = current
+  for (let i = entries.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1))
+    const tmp = entries[i]!
+    entries[i] = entries[j]!
+    entries[j] = tmp
   }
 
-  const shuffled: OptionMap = {
-    A: options[order[0]!],
-    B: options[order[1]!],
-    C: options[order[2]!],
-    D: options[order[3]!],
-  }
+  const nextOptions = {} as QuestionOptions
+  let nextOwner: OptionKey = 'A'
+  let nextPredicted: OptionKey = 'A'
 
-  const remap = (oldKey: OptionKey): OptionKey => {
-    const newIndex = order.indexOf(oldKey)
-    return OPTION_KEYS[newIndex] ?? 'A'
-  }
+  OPTION_KEYS.forEach((newKey, idx) => {
+    const item = entries[idx]!
+    nextOptions[newKey] = item.text
+    if (item.oldKey === ownerChoice) nextOwner = newKey
+    if (item.oldKey === agentPredicted) nextPredicted = newKey
+  })
 
   return {
-    options: shuffled,
-    ownerChoice: remap(ownerChoice),
-    agentPredicted: agentPredicted ? remap(agentPredicted) : null,
+    options: nextOptions,
+    ownerChoice: nextOwner,
+    agentPredicted: nextPredicted,
   }
 }
 
 export function evaluateDirection(
   questions: readonly StoredQuestion[],
-  answers: readonly AnswerRecord[],
-): DirectionMetrics {
-  const byQuestion = new Map(answers.map((answer) => [answer.questionId, answer]))
+  answers: readonly AnswerEntry[],
+): DirectionScore {
+  const byId = new Map(answers.map((a) => [a.questionId, a]))
+  const total = questions.length
   let answered = 0
   let abstained = 0
   let matched = 0
-  let starredMissed = 0
 
-  for (const question of questions) {
-    const answer = byQuestion.get(question.id)
-    if (!answer || answer.choice === 'U') {
-      abstained++
+  for (const q of questions) {
+    const ans = byId.get(q.id)
+    if (!ans || ans.choice === 'U') {
+      abstained += 1
       continue
     }
-    answered++
-    if (answer.choice === question.ownerChoice) {
-      matched++
-    } else if (question.starred) {
-      starredMissed++
+    answered += 1
+    if (ans.choice === q.ownerChoice) {
+      matched += 1
     }
   }
 
-  const total = questions.length
-  return {
-    total,
-    answered,
-    abstained,
-    coverage: total > 0 ? answered / total : 0,
-    matched,
-    hitRate: answered > 0 ? matched / answered : 0,
-    starredMissed,
-  }
+  const coverage = total > 0 ? answered / total : 0
+  const hitRate = answered > 0 ? matched / answered : null
+
+  return { total, answered, abstained, matched, coverage, hitRate }
 }
 
-export function passesPoolGate(aOnB: DirectionMetrics, bOnA: DirectionMetrics): boolean {
-  return (
-    aOnB.coverage >= POOL_MIN_COVERAGE &&
-    bOnA.coverage >= POOL_MIN_COVERAGE &&
-    aOnB.hitRate >= POOL_MIN_HIT_RATE &&
-    bOnA.hitRate >= POOL_MIN_HIT_RATE
+export function passesAgentMatchGate(dirA: DirectionScore, dirB: DirectionScore): boolean {
+  const dirs = [dirA, dirB].filter((d) => d.total > 0)
+  if (dirs.length === 0) return false
+
+  return dirs.every(
+    (d) =>
+      d.answered >= Math.min(MATCH_GATE.minAnswered, d.total) &&
+      d.coverage >= MATCH_GATE.minCoverage &&
+      d.hitRate !== null &&
+      d.hitRate >= MATCH_GATE.minHitRate,
   )
 }
 
 export function buildAgentSyncReport(
   questions: readonly StoredQuestion[],
-  humanAnswers: readonly AnswerRecord[],
-  agentAnswers: readonly AnswerRecord[],
+  humanAnswers: readonly AnswerEntry[],
+  agentAnswers: readonly AnswerEntry[],
 ): AgentSyncReport {
-  const humanMap = new Map(humanAnswers.map((item) => [item.questionId, item]))
-  const agentMap = new Map(agentAnswers.map((item) => [item.questionId, item]))
-  const mismatches: AgentSyncMismatch[] = []
+  const humanById = new Map(humanAnswers.map((a) => [a.questionId, a]))
+  const agentById = new Map(agentAnswers.map((a) => [a.questionId, a]))
+
   let comparableCount = 0
   let abstainedCount = 0
   let matchedCount = 0
+  const mismatches: AgentSyncMismatch[] = []
 
-  for (const question of questions) {
-    const human = humanMap.get(question.id)
-    const agent = agentMap.get(question.id)
+  for (const q of questions) {
+    const human = humanById.get(q.id)
+    const agent = agentById.get(q.id)
     if (!human || human.choice === 'U') continue
     if (!agent || agent.choice === 'U') {
-      abstainedCount++
+      abstainedCount += 1
       continue
     }
-    comparableCount++
+    comparableCount += 1
     if (agent.choice === human.choice) {
-      matchedCount++
+      matchedCount += 1
     } else {
       mismatches.push({
-        questionId: question.id,
-        prompt: question.prompt,
+        questionId: q.id,
+        prompt: q.prompt,
         agentChoice: agent.choice,
-        agentOptionText: question.options[agent.choice],
+        agentChoiceText: q.options[agent.choice],
         humanChoice: human.choice,
-        humanOptionText: question.options[human.choice],
-        agentReason: agent.reason ?? null,
+        humanChoiceText: q.options[human.choice],
       })
     }
   }
 
   const syncRate = comparableCount > 0 ? matchedCount / comparableCount : null
-  const calibrationPrompt =
-    mismatches.length > 0
-      ? [
-          '刚才在 Kindred 的双盲题库里，有几道题你替我猜偏了，请更新你对我的记忆：',
-          ...mismatches.map(
-            (item, index) =>
-              `${index + 1}. 题目「${item.prompt}」：你猜我会选「${item.agentOptionText}」，其实我本人会选「${item.humanOptionText}」。`,
-          ),
-        ].join('\n')
-      : null
+
+  let calibrationNote: string | null = null
+  if (mismatches.length > 0) {
+    const lines = mismatches.map(
+      (m, i) =>
+        `${i + 1}. 题目「${m.prompt}」：Agent 猜「${m.agentChoiceText}」，真人亲选「${m.humanChoiceText}」`,
+    )
+    calibrationNote = `以下 ${mismatches.length} 题与你的真实选择存在偏差，可顺手更新你对主人的记忆：\n${lines.join('\n')}`
+  }
 
   return {
     comparableCount,
@@ -158,41 +158,6 @@ export function buildAgentSyncReport(
     matchedCount,
     syncRate,
     mismatches,
-    calibrationPrompt,
+    calibrationNote,
   }
-}
-
-export function buildRevealItems(
-  questions: readonly StoredQuestion[],
-  quizOwnerSide: 'self' | 'partner',
-  humanAnswers: readonly AnswerRecord[],
-  agentAnswers: readonly AnswerRecord[],
-  exposeAgentReason: boolean,
-): QuestionRevealItem[] {
-  const humanMap = new Map(humanAnswers.map((item) => [item.questionId, item]))
-  const agentMap = new Map(agentAnswers.map((item) => [item.questionId, item]))
-
-  return questions.map((question) => {
-    const human = humanMap.get(question.id)
-    const agent = agentMap.get(question.id)
-    const humanChoice = human && human.choice !== 'U' ? human.choice : null
-    const agentChoice = agent ? agent.choice : null
-    const agentAgreedWithHuman =
-      humanChoice && agentChoice && agentChoice !== 'U' ? agentChoice === humanChoice : null
-
-    return {
-      questionId: question.id,
-      quizOwnerSide,
-      dimension: question.dimension,
-      prompt: question.prompt,
-      options: question.options,
-      starred: question.starred,
-      authorChoice: question.ownerChoice,
-      respondentHumanChoice: humanChoice,
-      respondentAgentChoice: agentChoice,
-      respondentAgentReason: exposeAgentReason ? (agent?.reason ?? null) : null,
-      humanMatched: humanChoice === question.ownerChoice,
-      agentAgreedWithHuman,
-    }
-  })
 }

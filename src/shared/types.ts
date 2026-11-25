@@ -1,47 +1,34 @@
 export type OptionKey = 'A' | 'B' | 'C' | 'D'
 export type AnswerChoice = OptionKey | 'U'
 export type ConfidenceLevel = 'high' | 'medium' | 'low'
-export type AgentHost = 'muse' | 'chatgpt' | 'grok' | 'openclaw' | 'other'
-export type PairingKind = 'pool' | 'link'
-export type PairingStatus = 'pending_agents' | 'ready_for_humans' | 'revealed' | 'archived'
-export type DrawRoundStatus =
-  | 'picking_word'
-  | 'awaiting_agent_draw'
-  | 'awaiting_drawer_approve'
-  | 'awaiting_guess'
-  | 'revealed'
 
-export interface OptionMap {
+export interface QuestionOptions {
   A: string
   B: string
   C: string
   D: string
 }
 
-export interface QuestionDraftInput {
+export interface QuizQuestionInput {
   dimension: string
   prompt: string
-  options: OptionMap
+  options: QuestionOptions
   ownerChoice: OptionKey
   agentPredicted?: OptionKey
   confidence?: ConfidenceLevel
-  memoryBasis?: string
   starred?: boolean
 }
 
 export interface StoredQuestion {
   id: string
-  ownerId: string
   position: number
   dimension: string
   prompt: string
-  options: OptionMap
+  options: QuestionOptions
   ownerChoice: OptionKey
-  agentPredicted: OptionKey | null
+  agentPredicted: OptionKey
   confidence: ConfidenceLevel
-  memoryBasis: string | null
   starred: boolean
-  approved: boolean
 }
 
 export interface PublicQuestion {
@@ -49,34 +36,38 @@ export interface PublicQuestion {
   position: number
   dimension: string
   prompt: string
-  options: OptionMap
+  options: QuestionOptions
   starred: boolean
 }
 
-export interface AnswerRecord {
+export interface AnswerEntry {
   questionId: string
   choice: AnswerChoice
-  reason?: string | null
 }
 
-export interface DirectionMetrics {
+export type PairingStatus =
+  | 'pending_agents'
+  | 'ready_for_humans'
+  | 'revealed'
+  | 'rejected'
+  | 'closed'
+
+export interface DirectionScore {
   total: number
   answered: number
   abstained: number
-  coverage: number
   matched: number
-  hitRate: number
-  starredMissed: number
+  coverage: number
+  hitRate: number | null
 }
 
 export interface AgentSyncMismatch {
   questionId: string
   prompt: string
   agentChoice: OptionKey
-  agentOptionText: string
+  agentChoiceText: string
   humanChoice: OptionKey
-  humanOptionText: string
-  agentReason: string | null
+  humanChoiceText: string
 }
 
 export interface AgentSyncReport {
@@ -85,31 +76,7 @@ export interface AgentSyncReport {
   matchedCount: number
   syncRate: number | null
   mismatches: AgentSyncMismatch[]
-  calibrationPrompt: string | null
-}
-
-export interface QuestionRevealItem {
-  questionId: string
-  quizOwnerSide: 'self' | 'partner'
-  dimension: string
-  prompt: string
-  options: OptionMap
-  starred: boolean
-  authorChoice: OptionKey
-  respondentHumanChoice: OptionKey | null
-  respondentAgentChoice: AnswerChoice | null
-  respondentAgentReason: string | null
-  humanMatched: boolean
-  agentAgreedWithHuman: boolean | null
-}
-
-export interface AnchorNoteView {
-  id: string
-  questionId: string
-  authorId: string
-  authorHandle: string
-  body: string
-  createdAt: string
+  calibrationNote: string | null
 }
 
 export interface Stroke {
@@ -118,37 +85,24 @@ export interface Stroke {
   points: [number, number][]
 }
 
+export type DrawRoundStatus =
+  | 'picking_word'
+  | 'awaiting_drawing'
+  | 'awaiting_guess'
+  | 'revealed'
+
 export interface DrawRoundView {
   id: string
   roundNumber: number
-  drawerId: string
-  drawerHandle: string
-  drawerAgentName: string
-  guesserId: string
-  guesserHandle: string
-  isSelfDrawer: boolean
+  role: 'drawer' | 'guesser'
   status: DrawRoundStatus
-  promptOptions: string[] | null
-  secretWord: string | null
-  wordLengthHint: number | null
-  drawingBrief: string | null
-  drawnBy: 'agent' | 'human' | null
-  strokes: Stroke[] | null
-  drawerApproved: boolean
-  guessText: string | null
+  promptOptions?: string[]
+  secretWord?: string | null
+  wordLengthHint?: number | null
+  imageUrl?: string | null
   guessAttempts: number
-  isCorrect: boolean | null
-  reaction: string | null
-  revealedAt: string | null
-}
-
-export interface DrawGameView {
-  id: string
-  pairingId: string
-  status: 'active' | 'completed'
-  maxRounds: number
-  selfId: string
-  partnerHandle: string
-  partnerAgentName: string
-  rounds: DrawRoundView[]
+  lastGuess?: string | null
+  guessedCorrectly: boolean
+  reaction?: string | null
+  revealedAt?: string | null
 }

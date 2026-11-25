@@ -44,9 +44,10 @@ export function validateStrokes(raw: unknown): { ok: true; strokes: Stroke[] } |
       return { ok: false, error: `stroke[${i}] must be an object` }
     }
     const candidate = item as Record<string, unknown>
-    const color = typeof candidate.color === 'string' && HEX_COLOR_RE.test(candidate.color)
-      ? candidate.color
-      : '#1F1D1A'
+    const color =
+      typeof candidate.color === 'string' && HEX_COLOR_RE.test(candidate.color)
+        ? candidate.color
+        : '#1F1D1A'
     const widthNum = Number(candidate.width)
     const width = Number.isFinite(widthNum) ? Math.min(24, Math.max(1, Math.round(widthNum))) : 4
 
@@ -79,6 +80,22 @@ export function validateStrokes(raw: unknown): { ok: true; strokes: Stroke[] } |
   return { ok: true, strokes }
 }
 
+export function strokesToStaticSvg(strokes: readonly Stroke[]): string {
+  const polylines = strokes
+    .map((stroke) => {
+      const pts = stroke.points.map(([x, y]) => `${x},${y}`).join(' ')
+      return `<polyline fill="none" stroke="${stroke.color}" stroke-width="${stroke.width}" stroke-linecap="round" stroke-linejoin="round" points="${pts}" />`
+    })
+    .join('')
+
+  return [
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${CANVAS_SIZE} ${CANVAS_SIZE}" width="${CANVAS_SIZE}" height="${CANVAS_SIZE}">`,
+    `<rect width="${CANVAS_SIZE}" height="${CANVAS_SIZE}" rx="16" fill="#FCFAF5" />`,
+    polylines,
+    `</svg>`,
+  ].join('')
+}
+
 export function normalizeGuess(value: string): string {
   return value
     .trim()
@@ -90,7 +107,10 @@ export function isCorrectGuess(secretWord: string, guess: string): boolean {
   const target = normalizeGuess(secretWord)
   const input = normalizeGuess(guess)
   if (!target || !input) return false
-  return target === input || (input.length >= 2 && target.includes(input) && input.length >= Math.ceil(target.length * 0.7))
+  return (
+    target === input ||
+    (input.length >= 2 && target.includes(input) && input.length >= Math.ceil(target.length * 0.7))
+  )
 }
 
 export function pickRoundPrompts(usedWords: readonly string[], seedIndex: number): string[] {
@@ -98,9 +118,9 @@ export function pickRoundPrompts(usedWords: readonly string[], seedIndex: number
   const available = DRAW_PROMPT_POOL.filter((word) => !used.has(word))
   const pool = available.length >= 3 ? available : [...DRAW_PROMPT_POOL]
   const picked: string[] = []
-  const start = Math.abs(seedIndex * 3) % pool.length
-  for (let i = 0; i < 3; i++) {
-    picked.push(pool[(start + i * 2) % pool.length]!)
+  for (let i = 0; i < 3 && pool.length > 0; i++) {
+    const idx = (seedIndex * 5 + i * 3) % pool.length
+    picked.push(pool.splice(idx, 1)[0]!)
   }
-  return Array.from(new Set(picked)).slice(0, 3)
+  return picked
 }
