@@ -214,8 +214,14 @@ const STRONG_HANDLE_CUES: readonly RegExp[] = [
 ]
 
 const BARE_CN_CONTENT_CUE_RE = new RegExp(`(?:${CN_CONTENT_PLATS})\\s*(?:是|为|叫|[:：=])\\s*${WRAP}$`, 'i')
-const CN_CONTENT_TOPIC_AFTER_RE =
-  /^[ \t]*(?:(?:[A-Za-z0-9+/.#-]{1,16}|[和与跟或比配的在用对](?=[ \t]*[A-Za-z0-9]))[ \t]*){0,4}(?!互关|互粉|关注|求关|私信|私聊|来聊|聊聊|找我|加我|滴滴|和我|联系)[\u4e00-\u9fff]{2,}/
+const CN_CONTACT_SOLICIT_RE =
+  /互关|互粉|关注|求关|私信|私聊|来聊|聊聊|找我|加我|加个|滴滴|和我|联系|搜我|我的号|账号|帐号/
+
+function isChineseContentTopicClause(after: string): boolean {
+  const clause = after.split(/(?<!\d)\.(?!\d)|[。!！?？;；]/, 1)[0] ?? ''
+  if (CN_CONTACT_SOLICIT_RE.test(clause)) return false
+  return /[\u4e00-\u9fff]{2,}/.test(clause)
+}
 
 const TRAILING_BEFORE_RE = new RegExp(
   `\\b(?:i\\s+am|i['’]m|im|call\\s+me|find|add|dm|follow|reach|contact|message|search|check|it['’]s|its)\\s*${WRAP}$`,
@@ -260,68 +266,69 @@ export function scanPii(text: string): { clean: boolean; findings: PiiFinding[] 
     .replace(/\r\n?|\u2028|\u2029/g, '\n')
   const findings: PiiFinding[] = []
 
-  for (const { category, pattern } of DIRECT_PATTERNS) {
-    pattern.lastIndex = 0
-    for (const match of normalized.matchAll(pattern)) {
-      findings.push({ category, excerpt: match[0].slice(0, 32) })
+  for (const line of normalized.split('\n')) {
+    if (!line) continue
+
+    for (const { category, pattern } of DIRECT_PATTERNS) {
+      pattern.lastIndex = 0
+      for (const match of line.matchAll(pattern)) {
+        findings.push({ category, excerpt: match[0].slice(0, 32) })
+      }
     }
-  }
 
-  PATH_URL_RE.lastIndex = 0
-  for (const match of normalized.matchAll(PATH_URL_RE)) {
-    const host = (match[1] ?? '').toLowerCase()
-    const ext = (match[2] ?? '').toLowerCase()
-    if (HONORIFICS.has(host) || CODE_OR_FILE_EXTS.has(ext)) continue
-    findings.push({ category: 'url', excerpt: match[0].slice(0, 32) })
-  }
+    PATH_URL_RE.lastIndex = 0
+    for (const match of line.matchAll(PATH_URL_RE)) {
+      const host = (match[1] ?? '').toLowerCase()
+      const ext = (match[2] ?? '').toLowerCase()
+      if (HONORIFICS.has(host) || CODE_OR_FILE_EXTS.has(ext)) continue
+      findings.push({ category: 'url', excerpt: match[0].slice(0, 32) })
+    }
 
-  PERSONAL_SITE_RE.lastIndex = 0
-  for (const match of normalized.matchAll(PERSONAL_SITE_RE)) {
-    const domain = (match[1] ?? '').toLowerCase()
-    if (TECH_NON_URL_NAMES.has(domain)) continue
-    findings.push({ category: 'url', excerpt: match[0].slice(0, 32) })
-  }
+    PERSONAL_SITE_RE.lastIndex = 0
+    for (const match of line.matchAll(PERSONAL_SITE_RE)) {
+      const domain = (match[1] ?? '').toLowerCase()
+      if (TECH_NON_URL_NAMES.has(domain)) continue
+      findings.push({ category: 'url', excerpt: match[0].slice(0, 32) })
+    }
 
-  SPACED_NANP_RE.lastIndex = 0
-  for (const match of normalized.matchAll(SPACED_NANP_RE)) {
-    const a = Number(match[1])
-    const b = Number(match[2])
-    const c = Number(match[3])
-    if (a % 100 === 0 && b % 100 === 0 && c % 100 === 0) continue
-    findings.push({ category: 'phone', excerpt: match[0].slice(0, 32) })
-  }
+    SPACED_NANP_RE.lastIndex = 0
+    for (const match of line.matchAll(SPACED_NANP_RE)) {
+      const a = Number(match[1])
+      const b = Number(match[2])
+      const c = Number(match[3])
+      if (a % 100 === 0 && b % 100 === 0 && c % 100 === 0) continue
+      findings.push({ category: 'phone', excerpt: match[0].slice(0, 32) })
+    }
 
-  TOKEN_RE.lastIndex = 0
-  for (const match of normalized.matchAll(TOKEN_RE)) {
-    const tok = match[0]
-    const start = match.index ?? 0
-    const end = start + tok.length
-    const lineStart = normalized.lastIndexOf('\n', start - 1) + 1
-    const nextNl = normalized.indexOf('\n', end)
-    const lineEnd = nextNl === -1 ? normalized.length : nextNl
-    const before = normalized.slice(Math.max(lineStart, start - 48), start)
-    const after = normalized.slice(end, Math.min(lineEnd, end + 40))
+    TOKEN_RE.lastIndex = 0
+    for (const match of line.matchAll(TOKEN_RE)) {
+      const tok = match[0]
+      const start = match.index ?? 0
+      const end = start + tok.length
+      const before = line.slice(Math.max(0, start - 48), start)
+      const after = line.slice(end)
 
-    if (isHandleShape(tok, false) && hasCueBefore(before, EXPLICIT_IDENTITY_CUES)) {
-      findings.push({ category: 'social_handle', excerpt: tok.slice(0, 32) })
-    } else if (isHandleShape(tok, true)) {
-      const strongShape = tok.includes('_') || tok.includes('.')
-      if (
-        hasCueBefore(before, GENERAL_SHAPE_CUES) ||
-        (strongShape && hasCueBefore(before, STRONG_HANDLE_CUES)) ||
-        (BARE_CN_CONTENT_CUE_RE.test(before) &&
-          (tok.includes('_') || !CN_CONTENT_TOPIC_AFTER_RE.test(after))) ||
-        (TRAILING_BEFORE_RE.test(before) && TRAILING_AFTER_RE.test(after))
-      ) {
+      if (isHandleShape(tok, false) && hasCueBefore(before, EXPLICIT_IDENTITY_CUES)) {
         findings.push({ category: 'social_handle', excerpt: tok.slice(0, 32) })
-      }
-    } else if (PURE_ALPHA_OR_HYPHEN_RE.test(tok)) {
-      if (hasCueBefore(before, PURE_ALPHA_EXPLICIT_CUES)) {
-        findings.push({ category: 'social_handle', excerpt: tok.slice(0, 32) })
-      }
-    } else if (/^[1-9]\d{5,11}$/.test(tok)) {
-      if (PURE_DIGIT_EXPLICIT_CUE_RE.test(before)) {
-        findings.push({ category: 'social_handle', excerpt: tok.slice(0, 32) })
+      } else if (isHandleShape(tok, true)) {
+        const strongShape = tok.includes('_') || tok.includes('.')
+        if (
+          hasCueBefore(before, GENERAL_SHAPE_CUES) ||
+          (strongShape && hasCueBefore(before, STRONG_HANDLE_CUES)) ||
+          (BARE_CN_CONTENT_CUE_RE.test(before) &&
+            (tok.includes('_') || !isChineseContentTopicClause(after))) ||
+          (TRAILING_BEFORE_RE.test(before) && TRAILING_AFTER_RE.test(after.slice(0, 40)))
+        ) {
+          findings.push({ category: 'social_handle', excerpt: tok.slice(0, 32) })
+        }
+      } else if (PURE_ALPHA_OR_HYPHEN_RE.test(tok)) {
+        if (hasCueBefore(before, PURE_ALPHA_EXPLICIT_CUES)) {
+          findings.push({ category: 'social_handle', excerpt: tok.slice(0, 32) })
+        }
+      } else if (/^[1-9]\d{5,11}$/.test(tok)) {
+        if (PURE_DIGIT_EXPLICIT_CUE_RE.test(before)) {
+          findings.push({ category: 'social_handle', excerpt: tok.slice(0, 32) })
+        }
       }
     }
   }
