@@ -59,7 +59,7 @@ const TECH_NON_URL_NAMES = new Set(['asp.net', 'vb.net', 'ado.net', 'paint.net']
 const RANKING_RE = /^top\d{1,4}$/i
 const SEMVER_RE = /^(?:v|vol)\.?\d+(?:\.\d+)*$/i
 const PRODUCT_MODEL_RE =
-  /^(?:(?:iphone|ipad|ios|macos|macbook|watchos|pixel|galaxy|redmi|mi|mate|nova|ps|xbox|switch|gpt|claude|qwen|llama|gemini|grok|sora|python|node|react|vue|dota|cs|gta|halo|web|http)[-.]?\d{1,3}(?:\.\d+)*[a-z]?|(?:rtx|gtx)[-.]?\d{3,4}(?:ti|super)?|es(?:6|20\d{2})|deepseek[-.]?(?:r|v)\d+(?:\.\d+)*|a\d+m\d+|h26[45]|m[1-9](?:pro|max|ultra))$/i
+  /^(?:(?:iphone|ipad|ios|macos|macbook|watchos|pixel|galaxy|redmi|mi|mate|nova|ps|xbox|switch|gpt|claude|qwen|llama|gemini|grok|sora|python|node|react|vue|dota|cs|gta|halo|web|http)[-.]?\d{1,2}(?:\.\d+)*[a-z]?|(?:rtx|gtx)[-.]?\d{3,4}(?:ti|super)?|es(?:6|20\d{2})|deepseek[-.]?(?:r|v)\d+(?:\.\d+)*|a\d+m\d+|h26[45]|m[1-9](?:pro|max|ultra))$/i
 
 function isHandleShape(token: string, allowProductExempt: boolean): boolean {
   if (token.length < 3 || token.length > 32) return false
@@ -70,8 +70,8 @@ function isHandleShape(token: string, allowProductExempt: boolean): boolean {
     if (HONORIFICS.has(dotParts[0]!.toLowerCase())) return false
     if (CODE_OR_FILE_EXTS.has(dotParts[1]!.toLowerCase())) return false
   }
+  if (RANKING_RE.test(token)) return false
   if (allowProductExempt) {
-    if (RANKING_RE.test(token)) return false
     if (SEMVER_RE.test(token)) return false
     if (PRODUCT_MODEL_RE.test(token)) return false
   }
@@ -80,7 +80,8 @@ function isHandleShape(token: string, allowProductExempt: boolean): boolean {
 }
 
 const WRAP = '[^A-Za-z0-9\\u4e00-\\u9fff.。!！?？;；\\n]{0,12}'
-const EXPLICIT_DELIM = '[^\\sA-Za-z0-9\\u4e00-\\u9fff.。!！?？;；\\n]'
+const TIGHT = '[^A-Za-z0-9\\u4e00-\\u9fff.。!！?？;；\\n、/|+&·-]{0,12}'
+const EXPLICIT_DELIM = '[^\\sA-Za-z0-9\\u4e00-\\u9fff.。!！?？;；\\n、/|+&·-]'
 
 const DIRECT_PATTERNS: ReadonlyArray<{ category: PiiFinding['category']; pattern: RegExp }> = [
   { category: 'email', pattern: /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi },
@@ -149,7 +150,7 @@ const PATH_URL_RE =
   /\b([A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)\.([a-z]{2,12})\/[A-Za-z0-9._~:/?#[\]@!$&'()*+,;=%-]+/g
 
 const PERSONAL_SITE_RE = new RegExp(
-  `(?:(?:我的|本人|个人)[ \\t]*(?:个人)?(?:主页|站点|网站|博客|官网)[ \\t]*(?:地址|链接|网址)?[ \\t]*(?:是|为|叫)?|\\bmy[ \\t]+(?:personal[ \\t]+)?(?:site|website|blog|homepage|portfolio)[ \\t]*(?:(?:url|link|address)[ \\t]*)?(?:is\\b|[:：=])?)[ \\t]*${WRAP}([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*\\.(?:com|net|org|io|me|dev|co|app|site|xyz|cc|cn|im|blog|studio))\\b`,
+  `(?:(?:我的?|本人|个人)[ \\t]*(?:个人)?(?:主页|站点|网站|博客|官网|blog)[ \\t]*(?:地址|链接|网址)?[ \\t]*(?:是|为|叫)?|(?:主页|博客|个人网站)[ \\t]*(?:地址|链接|网址)?[ \\t]*[:：=]|\\b(?:web[ \\t]?site|blog|homepage|portfolio)[ \\t]*[:：=]|\\bmy[ \\t]+(?:personal[ \\t]+)?(?:site|web[ \\t]?site|blog|homepage|portfolio)[ \\t]*(?:(?:url|link|address)[ \\t]*)?(?:is\\b|[:：=])?)[ \\t]*${WRAP}([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*\\.(?:com|net|org|io|me|dev|co|app|site|xyz|cc|cn|im|blog|studio))\\b`,
   'gi',
 )
 
@@ -169,19 +170,19 @@ const EN_ALL_PLATS = `(?:${EN_DM_PLATS}|${EN_CONTENT_PLATS})`
 
 const EXPLICIT_IDENTITY_CUES: readonly RegExp[] = [
   new RegExp(
-    `(?:我(?:的)?|本人)\\s*(?:(?:${CN_DM_PLATS}|${CN_CONTENT_PLATS}|${EN_ALL_PLATS}|[vVxX])\\s*(?:(?:账|帐)?号(?:码)?|用户名|ID|名|同号)?|(?:(?:账|帐)?号(?:码)?|用户名|ID|名))\\s*(?:是|为|叫)?\\s*${WRAP}$`,
+    `(?:我(?:的)?|本人)\\s*(?:(?:${CN_DM_PLATS}|${CN_CONTENT_PLATS}|${EN_ALL_PLATS}|[vVxX])\\s*(?:(?:账|帐)?号(?:码)?|用户名|ID|名|同号|是|为|叫|[:：=])|(?:(?:账|帐)?号(?:码)?|用户名|ID|名))\\s*(?:是|为|叫)?\\s*${WRAP}$`,
     'i',
   ),
   new RegExp(
-    `(?:(?:账|帐)号(?:码)?|用户名)\\s*(?:是|为|叫|${EXPLICIT_DELIM})\\s*${WRAP}$`,
+    `(?:(?<!游戏|本地|系统|共享)(?:账|帐)号(?:码)?|用户名)\\s*(?:是|为|叫|${EXPLICIT_DELIM})\\s*${WRAP}$`,
     'i',
   ),
   new RegExp(
-    `(?:${CN_DM_PLATS}|${CN_DM_ALIAS}|${CN_CONTENT_PLATS})\\s*(?:搜(?:索)?|(?:(?:账|帐)?号(?:码)?|ID|名|同号)\\s*(?:是|为|叫)?)\\s*${WRAP}$`,
+    `(?:${CN_DM_PLATS}|${CN_DM_ALIAS}|${CN_CONTENT_PLATS})\\s*(?:(?:(?:账|帐)?号(?:码)?|ID|名|同号)\\s*(?:是|为|叫)?)\\s*${WRAP}$`,
     'i',
   ),
   new RegExp(
-    `(?:加\\s*(?:我\\s*|个\\s*|一下\\s*)?(?:[vV微]|${CN_DM_PLATS}|${CN_CONTENT_PLATS}|${EN_ALL_PLATS})|(?<![A-Za-z0-9])\\+\\s*(?:[vV微]|${CN_DM_PLATS}|${CN_DM_ALIAS}))\\s*(?:(?:账|帐)?号(?:码)?|ID|名)?\\s*(?:吧|呀|哈|聊)?\\s*${WRAP}$`,
+    `(?:加\\s*(?:我\\s*|个\\s*|一下\\s*)?(?:[vV微]|${CN_DM_PLATS}|${CN_CONTENT_PLATS}|${EN_ALL_PLATS})|(?<![A-Za-z0-9])\\+\\s*(?:[vV微]|${CN_DM_PLATS}|${CN_DM_ALIAS}))(?!\\s*[、/|+&·-])\\s*(?:(?:账|帐)?号(?:码)?|ID|名)?\\s*(?:吧|呀|哈|聊)?\\s*${TIGHT}$`,
     'i',
   ),
   new RegExp(`\\b(?:username|handle)\\s*[:：=]\\s*${WRAP}$`, 'i'),
@@ -190,16 +191,18 @@ const EXPLICIT_IDENTITY_CUES: readonly RegExp[] = [
     'i',
   ),
   new RegExp(
-    `\\bmy\\s+(?:(?:${EN_DM_PLATS}|[vVxX])|(?:id|handle|username|account)|[A-Za-z][A-Za-z0-9_-]{1,18}\\s+(?:id|handle|account|username|name))\\s*(?:is\\b|[:：=])\\s*${WRAP}$`,
+    `\\bmy\\s+(?:(?:${EN_DM_PLATS}|[vVxX])|(?:id|handle|username|account)|[A-Za-z][A-Za-z0-9_-]{1,18}\\s+(?:id|handle|account|username))\\s*(?:is\\b|[:：=])\\s*${WRAP}$`,
     'i',
   ),
 ]
 
 const GENERAL_SHAPE_CUES: readonly RegExp[] = [
+  new RegExp(`(?:我(?:的)?|本人)\\s*(?:${CN_DM_PLATS}|${CN_CONTENT_PLATS}|${EN_ALL_PLATS})\\s*${TIGHT}$`, 'i'),
+  new RegExp(`(?:${CN_DM_PLATS}|${CN_DM_ALIAS}|${CN_CONTENT_PLATS})\\s*搜(?:索)?\\s*${TIGHT}$`, 'i'),
   new RegExp(`(?:加我|关注我|私信我|联系我|找我|滴滴我|dd我)\\s*${EXPLICIT_DELIM}${WRAP}$`, 'i'),
-  new RegExp(`(?:${CN_DM_PLATS}|${CN_DM_ALIAS})\\s*(?:是|为|叫)?\\s*${WRAP}$`, 'i'),
+  new RegExp(`(?:${CN_DM_PLATS}|${CN_DM_ALIAS})\\s*(?:是|为|叫)?\\s*${TIGHT}$`, 'i'),
   new RegExp(`(?<![A-Za-z])[vVxX]\\s*[:：=]\\s*${WRAP}$`),
-  new RegExp(`\\b${EN_DM_PLATS}\\s*(?:is\\b|[:：=]|\\s)\\s*${WRAP}$`, 'i'),
+  new RegExp(`\\b${EN_DM_PLATS}\\s*(?:is\\b|[:：=]|\\s)\\s*${TIGHT}$`, 'i'),
   new RegExp(`\\b${EN_CONTENT_PLATS}\\s*[:：=]\\s*${WRAP}$`, 'i'),
   new RegExp(
     `\\b(?:(?:find|add|dm|message|reach|contact|follow|text|ping)\\s+me(?:\\s+(?:(?:on|at)\\s+[A-Za-z0-9_.-]+(?:\\s+(?:as|at)\\b|\\s*[:：=]|\\s+)|(?:as|at)\\b))?|hmu(?:\\s+(?:on|at)\\s+[A-Za-z0-9_.-]+)?)\\s*${WRAP}$`,
@@ -208,14 +211,15 @@ const GENERAL_SHAPE_CUES: readonly RegExp[] = [
 ]
 
 const STRONG_HANDLE_CUES: readonly RegExp[] = [
-  new RegExp(`(?:加我|关注我|私信我|联系我|找我|滴滴我|dd我)\\s*${WRAP}$`, 'i'),
-  new RegExp(`\\b${EN_CONTENT_PLATS}\\s*${WRAP}$`, 'i'),
+  new RegExp(`(?:加我|关注我|私信我|联系我|找我|滴滴我|dd我)\\s*${TIGHT}$`, 'i'),
+  new RegExp(`\\b${EN_CONTENT_PLATS}[ \\t]+[“‘"'*]{0,2}$`, 'i'),
   new RegExp(`\\bmy\\s+${EN_CONTENT_PLATS}\\s*(?:is\\b|[:：=])\\s*${WRAP}$`, 'i'),
+  new RegExp(`\\b(?:find|add|dm|message|reach|contact|follow|text)\\s+me\\s+on\\s+${TIGHT}$`, 'i'),
 ]
 
 const BARE_CN_CONTENT_CUE_RE = new RegExp(`(?:${CN_CONTENT_PLATS})\\s*(?:是|为|叫|[:：=])\\s*${WRAP}$`, 'i')
 const CN_CONTACT_SOLICIT_RE =
-  /^(?:(?:欢迎|可以|直接|随时|请|来)(?:互关|互粉|回关|求关注|关注我|私信|私聊|找我|加我|滴滴|和我聊|联系我|搜我)|(?:互关|互粉|回关|求关注|关注我|私信我|私聊我|私信聊|私聊聊|找我|加我|滴滴我?|联系我|搜我|是我的号|是我号)|(?:私信|私聊|和我聊聊?)[吧呀啊哦哈啦~！!。]*$)/
+  /^(?:(?:欢迎|记得|可以|直接|随时|请|来)(?:互关|互粉|回关|关注|求关注|关注我|三连|私信|私聊|找我|加我|加$|滴滴|和我聊|联系我|搜我)|(?:互关|互粉|回关|求关注|关注我|求三连|私信我|私聊我|私信聊|私聊聊|找我|加我|滴滴我?|联系我|搜我|是我的号|是我号)|(?:私信|私聊|和我聊聊?)[吧呀啊哦哈啦~！!。]*$)/
 
 function isBareContentHandleClause(after: string): boolean {
   const clause = (
@@ -238,7 +242,7 @@ const TRAILING_AFTER_RE = new RegExp(
 
 const PURE_ALPHA_EXPLICIT_CUES: readonly RegExp[] = [
   new RegExp(
-    `(?:(?:我(?:的)?|本人)\\s*(?:微信|[vV]信|${CN_DM_ALIAS})\\s*(?:(?:账|帐)?号(?:码)?|ID|名)?\\s*(?:是|为|叫|[:：=])|(?:加\\s*(?:我|个|一下)?|(?<![A-Za-z0-9])\\+)[ \\t]*(?:[vV微]|微信|[vV]信|${CN_DM_ALIAS})\\s*(?:(?:账|帐)?号(?:码)?|ID)?\\s*(?:吧|呀|哈|聊)?|(?:微信|[vV]信|${CN_DM_ALIAS}|${CN_CONTENT_PLATS})\\s*(?:(?:账|帐)?号(?:码)?|ID|名|同号)\\s*(?:是|为|叫)?)\\s*${WRAP}$`,
+    `(?:(?:我(?:的)?|本人)\\s*(?:微信|[vV]信|${CN_DM_ALIAS})\\s*(?:(?:账|帐)?号(?:码)?|ID|名)?\\s*(?:是|为|叫|[:：=])|(?:加\\s*(?:我|个|一下)?|(?<![A-Za-z0-9])\\+)[ \\t]*(?:[vV微]|微信|[vV]信|${CN_DM_ALIAS})(?!\\s*[、/|+&·,-])\\s*(?:(?:账|帐)?号(?:码)?|ID)?\\s*(?:吧|呀|哈|聊)?|(?:微信|[vV]信|${CN_DM_ALIAS}|${CN_CONTENT_PLATS})\\s*(?:(?:账|帐)?号(?:码)?|ID|名|同号)\\s*(?:是|为|叫)?)\\s*${TIGHT}$`,
     'i',
   ),
   new RegExp(
@@ -315,7 +319,7 @@ export function scanPii(text: string): { clean: boolean; findings: PiiFinding[] 
       if (isHandleShape(tok, false) && hasCueBefore(before, EXPLICIT_IDENTITY_CUES)) {
         findings.push({ category: 'social_handle', excerpt: tok.slice(0, 32) })
       } else if (isHandleShape(tok, true)) {
-        const strongShape = tok.includes('_') || tok.includes('.')
+        const strongShape = tok.includes('_') || /^[A-Za-z0-9-]{3,}\.[A-Za-z0-9-]{3,}$/.test(tok)
         if (
           hasCueBefore(before, GENERAL_SHAPE_CUES) ||
           (strongShape && hasCueBefore(before, STRONG_HANDLE_CUES)) ||
