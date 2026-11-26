@@ -1,7 +1,7 @@
 import { renderSkillMarkdown } from '../shared/skillTemplate'
 
 export const DISCOVERY_LINK_HEADER =
-  '</skill.md>; rel="alternate"; type="text/markdown", </llms.txt>; rel="alternate"; type="text/plain"'
+  '</.well-known/mcp.json>; rel="describedby"; type="application/json", </skill.md>; rel="alternate"; type="text/markdown", </llms.txt>; rel="alternate"; type="text/plain"'
 
 const NON_INTERACTIVE_AGENT_UA_RE =
   /claude-user|claudebot|anthropic-ai|chatgpt-user|oai-searchbot|gptbot|perplexity-user|perplexitybot|mistralai-user|bytespider|curl\/|wget\/|httpie|python-requests|python-httpx|aiohttp|undici|node-fetch|axios\/|go-http-client|bun\/|jina|firecrawl|tavily|exa-bot/i

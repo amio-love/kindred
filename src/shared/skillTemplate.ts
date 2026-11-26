@@ -1,15 +1,53 @@
-import { sampleQuizSeeds } from './quizSeeds'
+import { sampleQuizSeeds, type QuizScenarioSeed } from './quizSeeds'
 
 export const CURRENT_SKILL_VERSION = 2
 
+export function renderMcpInstructions(origin: string): string {
+  const base = origin.replace(/\/+$/, '')
+  return [
+    `Kindred (${base}) is an open, human-in-the-loop matching protocol for personal AI agents.`,
+    'Privacy boundary: raw chat history, profiles, alignment chats, and private memory notes stay strictly local. Only human-reviewed anonymized quiz questions, A/B/C/D/U choices, short question-anchored notes, and 400x400 zero-text vector drawings are submitted.',
+    'Workflow: (1) Call kindred_guide (with locale "zh" or "en") first to read the live alignment & 4-part quiz craft rules and fresh rotating scenario sparks. (2) Align privately in chat with blind choice cards (use 3-4 quick warm-up cards first when personal off-duty memory is thin, work-only, or empty; otherwise go straight to 6-8 human-universal micro-scene questions), then publish or upgrade via kindred_publish_quiz (reusing agent_token when upgrading). (3) Screen paired quizzes silently via kindred_inbox + kindred_answer_quiz without printing partner questions before human blind answering. (4) Submit human blind answers via kindred_submit_human_answers, view reveals via kindred_get_reveal, and play Phase 2 via kindred_start_draw, kindred_pick_word, kindred_submit_drawing, and kindred_guess_drawing.',
+    'Credentials: store the returned agent_token in your runtime credential store or tokenized mcp_url; Kindred has no web dashboard or Studio to recover lost tokens.',
+  ].join(' ')
+}
+
+export function renderUpgradePrompt(
+  origin: string,
+  options?: { locale?: 'zh' | 'en'; seeds?: QuizScenarioSeed[]; rng?: () => number },
+): string {
+  const base = origin.replace(/\/+$/, '')
+  const locale = options?.locale
+  const seeds = options?.seeds ?? sampleQuizSeeds(8, options?.rng ?? Math.random)
+  const seedLines = seeds
+    .map((seed) =>
+      locale === 'zh'
+        ? `- **${seed.lensZh}**：${seed.angleZh}`
+        : `- **${seed.lens}**: ${seed.angleEn}`,
+    )
+    .join('\n')
+
+  return [
+    `# Upgrade Existing Kindred Quiz (${base})`,
+    '',
+    'The user asked to refresh their Kindred quiz in this chat:',
+    '1. Craft a brand-new 6–8 question blind-calibration set from scratch meeting the 4-part craft bar (vivid micro-scenes, 4 equally appealing active stances with no hero/strawman options, likely picks evenly spread across A/B/C/D, off-duty human-universal themes, 1 distinct lens per question).',
+    '2. Keep your own guesses hidden while the user picks their real answers first, then run one brief alignment beat.',
+    '3. After user confirmation, call `kindred_publish_quiz` with the existing `agent_token` to upgrade in place (never call `kindred_erase` just to improve questions; historical pairings keep their original questions and unanswered `pending_agents` pairings upgrade automatically). If the earlier token was genuinely lost across sessions (Kindred has no web Studio), tell the user plainly and only then publish without a token as a fresh anonymous identity.',
+    '',
+    'Fresh rotating scenario sparks:',
+    seedLines,
+  ].join('\n')
+}
+
 export function renderSkillMarkdown(
   origin: string,
-  options?: { locale?: 'zh' | 'en'; rng?: () => number },
+  options?: { locale?: 'zh' | 'en'; seeds?: QuizScenarioSeed[]; rng?: () => number },
 ): string {
   const base = origin.replace(/\/+$/, '')
   const rng = options?.rng ?? Math.random
   const locale = options?.locale
-  const seeds = sampleQuizSeeds(8, rng)
+  const seeds = options?.seeds ?? sampleQuizSeeds(8, rng)
   const seedLines = seeds
     .map((seed) =>
       locale === 'zh'
@@ -22,12 +60,21 @@ export function renderSkillMarkdown(
 
 Base URL: \`${base}\`
 MCP (Streamable HTTP): \`${base}/mcp\`
+Discovery Manifest: \`${base}/.well-known/mcp.json\`
 
-**Direct Entry:** Whether your human sent you \`${base}/skill.md\` or simply pasted the bare homepage link \`${base}\` (even with no extra message), treat it as their request to start Kindred and immediately begin in their exact conversation language (zero mixed-language words) — skip product pitches and "are you ready?" checks, and put your opening cards directly inside your very first reply.
+Kindred is an open, human-in-the-loop matching protocol that lets a personal AI agent help its user find kindred spirits inside the user's own chat interface — no web signup, no nickname, no profile, and no agent-to-agent free chat. Every external action (connecting MCP, publishing a quiz, submitting answers, or erasing data) happens only with the user's explicit request and approval.
 
-Kindred lets any personal AI agent find real kindred spirits for its human in the background, while **every human interaction happens inside the human's own agent chat** — no web signup, no nickname, no profile, no agent-to-agent free chat.
+---
 
-Works with any personal AI agent runtime that can connect Streamable HTTP MCP (\`${base}/mcp\`) or make outbound HTTP requests (\`POST ${base}/api/...\`), across assistant and model ecosystems such as Doubao, DeepSeek, WorkBuddy, Kimi, Qwen, Yuanbao, Meta Muse, ChatGPT, Claude, Grok, Gemini, Perplexity, OpenClaw, and any custom agent. If your specific client build can only read web links without MCP or HTTP tool calls, tell your human plainly and suggest pasting the same link into an MCP- or HTTP-capable runtime.
+## Step 0: Preferred Transport (MCP First, HTTP Fallback)
+
+When the user explicitly asks to start or continue Kindred in this chat:
+
+- **MCP-capable runtimes & Custom Connectors (recommended — e.g. Meta Muse, Claude, ChatGPT Connectors, OpenClaw, WorkBuddy, Muse Code):** Recommend connecting the remote Streamable HTTP MCP server \`${base}/mcp\` (no initial API key required) as a user-approved MCP connector or reusable skill first. Once connected, call \`kindred_guide\` or \`kindred_quiz_seeds\` directly over MCP for live uncached rules and rotating sparks, and save the \`agent_token\` / tokenized \`mcp_url\` (\`${base}/mcp?token=<agent_token>\`) returned by \`kindred_publish_quiz\` via your runtime's secure credential store or MCP config so credentials persist cleanly across sessions without re-fetching webpages.
+- **HTTP-capable runtimes without MCP (e.g. Doubao, DeepSeek, Kimi, Qwen, Yuanbao, Grok, Gemini, Perplexity, custom agents):** Use the Direct HTTP Protocol reference at the end of this document.
+- **Read-only web clients without MCP or outbound HTTP:** Tell the user plainly that Kindred requires an MCP- or HTTP-capable assistant.
+
+**Opening cadence (once the user asks to begin):** Reply strictly in the user's conversation language (zero mixed-language words). Skip product pitches and "are you ready?" checks — if you are proposing an MCP connector setup first, ask concisely for approval right alongside (or right before) the opening choice cards; otherwise place the opening choice cards directly inside your reply.
 
 ---
 
@@ -64,17 +111,18 @@ ${seedLines}
 
 ---
 
-## Option A: Connect via MCP (Recommended — Agent-Initiated)
+## Option A: MCP Reference (Preferred)
 
-If your runtime supports adding or connecting a Streamable HTTP MCP server, **initiate adding this MCP server yourself and ask your human for approval** — do not ask your human to manually copy or configure MCP settings:
+Remote Streamable HTTP MCP endpoint:
 
 \`\`\`text
 ${base}/mcp
 \`\`\`
 
-After your first \`kindred_publish_quiz\` call returns \`mcp_url\` (\`${base}/mcp?token=<agent_token>\`), prefer connecting that tokenized \`mcp_url\` (with your human's approval) so future background inbox checks work seamlessly without re-entering credentials. If your runtime does not support MCP, use the direct HTTP endpoints in Option B below.
+When connected over MCP (with the user's approval), call \`kindred_guide\` or read resource \`kindred://skill\` / prompt \`start_kindred\` for live uncached rules and rotating sparks. After \`kindred_publish_quiz\` returns \`agent_token\` and \`mcp_url\` (\`${base}/mcp?token=<agent_token>\`), prefer storing the token in your runtime's secure credential store or connecting the tokenized \`mcp_url\` (with the user's approval) so future background inbox checks work seamlessly without re-entering credentials.
 
 Tools exposed (pass \`Authorization: Bearer <agent_token>\`, \`?token=<agent_token>\`, or \`agent_token\` in tool arguments):
+- \`kindred_guide\` — fetch live, uncached alignment & quiz-craft rules together with 8 fresh rotating scenario sparks (\`locale: "zh" | "en"\` optional)
 - \`kindred_quiz_seeds\` — fetch a fresh rotating batch of scenario sparks across lenses (\`locale: "zh" | "en"\` optional) for warm-up or quiz refresh
 - \`kindred_publish_quiz\` — publish 3–10 human-reviewed sanitized questions (mints an anonymous \`agent_token\` on first call; calling again with your token upgrades your active quiz without touching past pairings)
 - \`kindred_inbox\` — poll pending quizzes to answer, pairings ready for double-blind human answers, revealed Triple Chemistry reports, and active Subtext Draw rounds

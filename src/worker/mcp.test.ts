@@ -151,13 +151,132 @@ describe('Streamable HTTP MCP, CORS, and route boundary compliance', () => {
       env,
     )
     assert.equal(batchRes.status, 200)
+    assert.equal(batchRes.headers.get('Cache-Control'), 'no-store')
     const items = (await batchRes.json()) as Array<{
       id: number
-      result?: { protocolVersion?: string; tools?: Array<{ name: string }> }
+      result?: {
+        protocolVersion?: string
+        serverInfo?: { name?: string; version?: string }
+        capabilities?: { tools?: unknown; resources?: unknown; prompts?: unknown }
+        instructions?: string
+        tools?: Array<{ name: string }>
+      }
     }>
     assert.equal(items.length, 2)
     assert.equal(items[0]?.result?.protocolVersion, '2025-03-26')
-    assert.equal(items[1]?.result?.tools?.length, 12)
+    assert.equal(items[0]?.result?.serverInfo?.version, '2.3.0')
+    assert.ok(items[0]?.result?.capabilities?.prompts)
+    assert.ok(items[0]?.result?.instructions?.includes('kindred_guide'))
+    assert.equal(items[1]?.result?.tools?.length, 13)
+
+    const guideCall = await app.request(
+      'https://kindred.example.test/mcp',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 20,
+          method: 'tools/call',
+          params: { name: 'kindred_guide', arguments: { locale: 'zh' } },
+        }),
+      },
+      env,
+    )
+    assert.equal(guideCall.status, 200)
+    assert.equal(guideCall.headers.get('Cache-Control'), 'no-store')
+    const guidePayload = (await guideCall.json()) as {
+      result?: {
+        isError?: boolean
+        structuredContent?: {
+          current_skill_version?: number
+          mcp_url?: string
+          guide_markdown?: string
+          seeds?: Array<{ lens: string; angle: string }>
+        }
+      }
+    }
+    assert.equal(guidePayload.result?.isError, false)
+    assert.equal(guidePayload.result?.structuredContent?.current_skill_version, 2)
+    assert.equal(guidePayload.result?.structuredContent?.mcp_url, 'https://kindred.example.test/mcp')
+    assert.ok(guidePayload.result?.structuredContent?.guide_markdown?.includes('Step 0: Preferred Transport'))
+    assert.equal(guidePayload.result?.structuredContent?.seeds?.length, 8)
+
+    const promptsList = await app.request(
+      'https://kindred.example.test/mcp',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 22, method: 'prompts/list' }),
+      },
+      env,
+    )
+    assert.equal(promptsList.status, 200)
+    const promptsListBody = (await promptsList.json()) as {
+      result?: { prompts?: Array<{ name: string }> }
+    }
+    assert.deepEqual(
+      promptsListBody.result?.prompts?.map((p) => p.name),
+      ['start_kindred', 'upgrade_kindred'],
+    )
+
+    const startPrompt = await app.request(
+      'https://kindred.example.test/mcp',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 23,
+          method: 'prompts/get',
+          params: { name: 'start_kindred', arguments: { locale: 'zh' } },
+        }),
+      },
+      env,
+    )
+    assert.equal(startPrompt.status, 200)
+    const startPromptBody = (await startPrompt.json()) as {
+      result?: { messages?: Array<{ content?: { text?: string } }> }
+    }
+    assert.ok(startPromptBody.result?.messages?.[0]?.content?.text?.includes('Session Scenario Sparks'))
+
+    const upgradePrompt = await app.request(
+      'https://kindred.example.test/mcp',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 24,
+          method: 'prompts/get',
+          params: { name: 'upgrade_kindred', arguments: { locale: 'en' } },
+        }),
+      },
+      env,
+    )
+    assert.equal(upgradePrompt.status, 200)
+    const upgradePromptBody = (await upgradePrompt.json()) as {
+      result?: { messages?: Array<{ content?: { text?: string } }> }
+    }
+    assert.ok(upgradePromptBody.result?.messages?.[0]?.content?.text?.includes('Upgrade Existing Kindred Quiz'))
+
+    const badPrompt = await app.request(
+      'https://kindred.example.test/mcp',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 25,
+          method: 'prompts/get',
+          params: { name: 'nonexistent_prompt' },
+        }),
+      },
+      env,
+    )
+    assert.equal(badPrompt.status, 400)
+    const badPromptBody = (await badPrompt.json()) as { error?: { code?: number } }
+    assert.equal(badPromptBody.error?.code, -32602)
 
     const seedsCall = await app.request(
       'https://kindred.example.test/mcp',
@@ -358,12 +477,33 @@ describe('Streamable HTTP MCP, CORS, and route boundary compliance', () => {
       assert.match(ok.headers.get('Content-Type') ?? '', /text\/markdown/)
       assert.equal(ok.headers.get('Cache-Control'), 'no-store')
       assert.match(ok.headers.get('Link') ?? '', /rel="alternate"/)
+      assert.match(ok.headers.get('Link') ?? '', /\/\.well-known\/mcp\.json/)
       const text = await ok.text()
       assert.ok(text.includes('https://kindred.example.test/mcp'))
-      assert.ok(text.includes('Direct Entry:'))
+      assert.ok(text.includes('Step 0: Preferred Transport'))
+      assert.ok(text.includes('kindred_guide'))
       assert.ok(text.includes('Session Scenario Sparks'))
       assert.ok(text.includes('Upgrading an existing quiz'))
+      assert.ok(!text.includes('even with no extra message'))
+      assert.ok(!text.includes('initiate adding this MCP server yourself'))
     }
+
+    const wellKnown = await app.request('https://kindred.example.test/.well-known/mcp.json', { method: 'GET' }, env)
+    assert.equal(wellKnown.status, 200)
+    assert.match(wellKnown.headers.get('Content-Type') ?? '', /application\/json/)
+    assert.equal(wellKnown.headers.get('Cache-Control'), 'no-store')
+    const manifest = (await wellKnown.json()) as {
+      endpoint?: string
+      protocol_version?: string
+      capabilities?: { tools?: boolean; resources?: boolean; prompts?: boolean }
+    }
+    assert.equal(manifest.endpoint, 'https://kindred.example.test/mcp')
+    assert.equal(manifest.protocol_version, '2025-03-26')
+    assert.deepEqual(manifest.capabilities, { tools: true, resources: true, prompts: true })
+
+    const wellKnownHead = await app.request('https://kindred.example.test/.well-known/mcp.json', { method: 'HEAD' }, env)
+    assert.equal(wellKnownHead.status, 200)
+    assert.equal(await wellKnownHead.text(), '')
 
     for (const badPath of ['/skill.md%EF%BC%8C%E7%84%B6%E5%90%8E', '/api', '/api/none', '/mcp/extra']) {
       const res = await app.request(`https://kindred.example.test${badPath}`, { method: 'GET' }, env)

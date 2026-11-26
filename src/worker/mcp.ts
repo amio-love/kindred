@@ -1,6 +1,12 @@
 import { Hono } from 'hono'
 import { KINDRED_TOOLS } from '../shared/mcpTools'
-import { renderSkillMarkdown } from '../shared/skillTemplate'
+import { sampleQuizSeeds } from '../shared/quizSeeds'
+import {
+  CURRENT_SKILL_VERSION,
+  renderMcpInstructions,
+  renderSkillMarkdown,
+  renderUpgradePrompt,
+} from '../shared/skillTemplate'
 import { extractBearerToken, type Env } from './env'
 import {
   ProtocolError,
@@ -48,6 +54,20 @@ async function dispatchToolCall(
       : headerToken
 
   switch (name) {
+    case 'kindred_guide': {
+      const locale = args.locale === 'zh' || args.locale === 'en' ? args.locale : undefined
+      const seeds = sampleQuizSeeds(8)
+      return {
+        current_skill_version: CURRENT_SKILL_VERSION,
+        mcp_url: `${origin.replace(/\/+$/, '')}/mcp`,
+        locale: locale ?? 'en',
+        guide_markdown: renderSkillMarkdown(origin, { locale, seeds }),
+        seeds: seeds.map((seed) => ({
+          lens: locale === 'zh' ? seed.lensZh : seed.lens,
+          angle: locale === 'zh' ? seed.angleZh : seed.angleEn,
+        })),
+      }
+    }
     case 'kindred_quiz_seeds':
       return getQuizSeeds({
         locale: args.locale === 'zh' || args.locale === 'en' ? args.locale : undefined,
@@ -142,13 +162,93 @@ async function handleRpcItem(
         capabilities: {
           tools: {},
           resources: {},
+          prompts: {},
         },
         serverInfo: {
           name: 'kindred',
-          version: '2.2.0',
+          version: '2.3.0',
         },
+        instructions: renderMcpInstructions(origin),
       }),
     }
+  }
+
+  if (req.method === 'prompts/list') {
+    return {
+      payload: rpcResult(req.id, {
+        prompts: [
+          {
+            name: 'start_kindred',
+            description:
+              'Start Kindred in this chat using live uncached alignment & quiz-craft rules and fresh rotating scenario sparks.',
+            arguments: [
+              {
+                name: 'locale',
+                description: 'Optional preferred language for scenario sparks (zh or en).',
+                required: false,
+              },
+            ],
+          },
+          {
+            name: 'upgrade_kindred',
+            description:
+              'Upgrade an existing Kindred quiz from scratch with fresh rotating scenario sparks while keeping past pairings intact.',
+            arguments: [
+              {
+                name: 'locale',
+                description: 'Optional preferred language for scenario sparks (zh or en).',
+                required: false,
+              },
+            ],
+          },
+        ],
+      }),
+    }
+  }
+
+  if (req.method === 'prompts/get') {
+    const name = typeof req.params?.name === 'string' ? req.params.name : ''
+    const promptArgs =
+      req.params?.arguments && typeof req.params.arguments === 'object'
+        ? (req.params.arguments as Record<string, unknown>)
+        : {}
+    const locale = promptArgs.locale === 'zh' || promptArgs.locale === 'en' ? promptArgs.locale : undefined
+
+    if (name === 'start_kindred') {
+      return {
+        payload: rpcResult(req.id, {
+          description: 'Live Kindred start protocol with rotating scenario sparks.',
+          messages: [
+            {
+              role: 'user',
+              content: {
+                type: 'text',
+                text: renderSkillMarkdown(origin, { locale }),
+              },
+            },
+          ],
+        }),
+      }
+    }
+
+    if (name === 'upgrade_kindred') {
+      return {
+        payload: rpcResult(req.id, {
+          description: 'Returning-agent Kindred quiz upgrade guide with rotating scenario sparks.',
+          messages: [
+            {
+              role: 'user',
+              content: {
+                type: 'text',
+                text: renderUpgradePrompt(origin, { locale }),
+              },
+            },
+          ],
+        }),
+      }
+    }
+
+    return { status: 400, payload: rpcError(req.id, -32602, `Unknown prompt: ${name}`) }
   }
 
   if (req.method === 'ping') {
@@ -246,6 +346,7 @@ export function createMcpRoutes() {
   })
 
   app.post('/', async (c) => {
+    c.header('Cache-Control', 'no-store')
     let raw: unknown
     try {
       raw = JSON.parse(await c.req.text())

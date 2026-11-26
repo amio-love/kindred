@@ -8,6 +8,23 @@ export interface KindredToolDescriptor {
 
 export const KINDRED_TOOLS: readonly KindredToolDescriptor[] = [
   {
+    name: 'kindred_guide',
+    title: 'Get Live Kindred Protocol & Sparks',
+    description:
+      'Fetch the live, uncached Kindred alignment & quiz-craft guide together with a fresh rotating batch of 8 distinct-lens scenario sparks over MCP (no web fetch needed). Call this first when starting or upgrading Kindred.',
+    readOnlyHint: true,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        locale: {
+          type: 'string',
+          enum: ['zh', 'en'],
+          description: 'Optional preferred language for the returned scenario sparks.',
+        },
+      },
+    },
+  },
+  {
     name: 'kindred_quiz_seeds',
     title: 'Get Rotating Quiz Scenario Sparks',
     description:

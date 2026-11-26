@@ -51,6 +51,41 @@ function parseLocaleParam(url: URL): 'zh' | 'en' | undefined {
   return raw === 'zh' || raw === 'en' ? raw : undefined
 }
 
+app.on(['GET', 'HEAD'], '/.well-known/mcp.json', (c) => {
+  const origin = new URL(c.req.url).origin
+  const manifest = {
+    schema_version: '1.0',
+    name: 'kindred',
+    title: 'Kindred',
+    description:
+      'Open personal-agent matching protocol — blind personal quizzes, silent agent screening, and blind visual subtext games inside your own AI chat.',
+    protocol_version: '2025-03-26',
+    endpoint: `${origin}/mcp`,
+    transport: 'streamable-http',
+    transports: ['streamable-http'],
+    auth: {
+      type: 'optional-bearer',
+      bootstrap: 'none',
+      header: 'Authorization',
+      scheme: 'Bearer',
+      query_param: 'token',
+    },
+    capabilities: {
+      tools: true,
+      resources: true,
+      prompts: true,
+    },
+    documentation: `${origin}/skill.md`,
+  }
+  return new Response(c.req.method === 'HEAD' ? null : JSON.stringify(manifest, null, 2), {
+    status: 200,
+    headers: {
+      'Content-Type': 'application/json; charset=utf-8',
+      'Cache-Control': 'no-store',
+    },
+  })
+})
+
 app.on(['GET', 'HEAD'], '/skill.md', (c) => {
   const url = new URL(c.req.url)
   return buildMarkdownSkillResponse(url.origin, c.req.method === 'HEAD', undefined, parseLocaleParam(url))
