@@ -64,8 +64,8 @@ export const COPY: Record<Locale, CopyBundle> = {
     openProtocolNote: '基于开放协议，支持任何能接 MCP 或调用 HTTP API 的个人 AI',
     promptTemplate: (skillUrl) => `请读一下 ${skillUrl} 并在这条对话里带我开始 Kindred。`,
     stageHeader: '演示视频',
-    videoSrc: '/media/kindred-demo-zh-v5.mp4',
-    videoPoster: '/media/kindred-demo-zh-v5-poster.jpg',
+    videoSrc: '/media/kindred-demo-zh-v6.mp4',
+    videoPoster: '/media/kindred-demo-zh-v6-poster.jpg',
     videoChapters: ['私房题寻人', '默契揭晓', '画意象盲选'],
     videoProgressLabel: '演示视频进度',
     playLabel: '播放演示',
@@ -89,7 +89,7 @@ export const COPY: Record<Locale, CopyBundle> = {
       {
         id: 'crossing',
         src: '/art/seaside-crossing.jpg',
-        alt: '海边铁路平交道绿白电车与地面篮球书包的手绘意象插画',
+        alt: '落日海边铁路平交道与绿白电车驶过金色海面的手绘意象插画',
         artBadge: '意象插画',
         options: [
           '灌篮高手：电车开过去，湘北的夏天就结束了',
@@ -97,8 +97,8 @@ export const COPY: Record<Locale, CopyBundle> = {
           '秒速五厘米：隔着一道铁轨，两个人越走越远',
           '海街日记：海风很咸，有你在的日常刚刚好',
         ],
-        drawerIndex: 0,
-        hitNote: '不约而同 · 电车还没开完，你们脑海里响起的是同一首片头曲',
+        drawerIndex: 2,
+        hitNote: '不约而同 · 同一道落日铁轨，你们都想起了那个渐行渐远的瞬间',
       },
       {
         id: 'elevator',
@@ -146,8 +146,8 @@ export const COPY: Record<Locale, CopyBundle> = {
     promptTemplate: (skillUrl) =>
       `Read ${skillUrl} and walk me through Kindred right here in this chat.`,
     stageHeader: 'Product demo video',
-    videoSrc: '/media/kindred-demo-en-v5.mp4',
-    videoPoster: '/media/kindred-demo-en-v5-poster.jpg',
+    videoSrc: '/media/kindred-demo-en-v6.mp4',
+    videoPoster: '/media/kindred-demo-en-v6-poster.jpg',
     videoChapters: ['Private quiz', 'Chemistry reveal', 'Blind subtext'],
     videoProgressLabel: 'Demo playback progress',
     playLabel: 'Play demo',
@@ -171,7 +171,7 @@ export const COPY: Record<Locale, CopyBundle> = {
       {
         id: 'crossing',
         src: '/art/seaside-crossing.jpg',
-        alt: 'Sketchbook illustration of a coastal railway crossing with a green train, basketball, and schoolbag',
+        alt: 'Sketchbook illustration of a sunset coastal railway crossing with a green train gliding past a shimmering ocean',
         artBadge: 'Concept illustration',
         options: [
           'Slam Dunk: summer ends once the train passes',
@@ -179,8 +179,8 @@ export const COPY: Record<Locale, CopyBundle> = {
           '5cm/s: drifting apart across the same tracks',
           'Our Little Sister: salty breeze, quiet warmth',
         ],
-        drawerIndex: 0,
-        hitNote: 'Same wavelength — before the train clears, you both heard the same theme song',
+        drawerIndex: 2,
+        hitNote: 'Same wavelength — at that sunset crossing, you both felt two lives drifting across the tracks',
       },
       {
         id: 'elevator',

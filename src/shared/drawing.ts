@@ -19,7 +19,7 @@ export const SUBTEXT_PROMPT_POOL: readonly SubtextPromptTemplate[] = [
     ],
   },
   {
-    visualHint: '落日海边铁路平交道黄黑栏杆、驶过的绿白电车、路面旁孤零零的篮球与书包',
+    visualHint: '落日海边铁路平交道黄黑栏杆、驶过的绿白电车、金色海面与空旷安静的临海公路',
     readings: [
       '灌篮高手：电车开过去，湘北的夏天就结束了',
       '千与千寻：想坐上一趟只去不回的海上列车',
@@ -130,7 +130,7 @@ export const SUBTEXT_PROMPT_POOL_EN: readonly SubtextPromptTemplate[] = [
     ],
   },
   {
-    visualHint: 'Sunset ocean railway crossing barrier, green-and-cream coastal train, a basketball and schoolbag resting nearby',
+    visualHint: 'Sunset ocean railway crossing barrier, green-and-cream coastal train, golden water, and an empty sunlit seaside road',
     readings: [
       'Slam Dunk: summer ends once the train passes',
       'Spirited Away: one-way train across the sea',

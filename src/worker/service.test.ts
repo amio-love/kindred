@@ -767,6 +767,136 @@ describe('Phase 1 quiz publishing, screening gates, and double-blind immutabilit
     assert.equal(inboxAsB.pending_quizzes.some((p) => p.pairing_id === unansweredBId), true)
   })
 
+  test('enforces strict 24h cap and exact created counts under concurrent pool entry, blocks 409 promotion, and guards quiz replacement atomically', async () => {
+    const poolBarrier = createBarrier(6)
+    let interleavePool = false
+    const dbPool = createSqliteD1({
+      beforeExecuteSql: async (sql, op) => {
+        if (interleavePool && op === 'run' && /INSERT OR IGNORE INTO pairings/i.test(sql)) {
+          await poolBarrier()
+        }
+      },
+    })
+    const seed = await publishQuiz(dbPool, ORIGIN, null, buildQuestions('pool-seed'))
+    const tokens: string[] = [seed.agent_token!]
+    for (let i = 0; i < 5; i++) {
+      const p = await publishQuiz(dbPool, ORIGIN, null, buildQuestions(`pool-${i}`))
+      tokens.push(p.agent_token!)
+    }
+    await dbPool.prepare('DELETE FROM pairings').run()
+
+    interleavePool = true
+    const results = await Promise.all(
+      tokens.map((t) => getInbox(dbPool, ORIGIN, t, { maxNew: 3, dailyLimit: 3 })),
+    )
+    interleavePool = false
+    assert.equal(results.length, 6)
+
+    const { results: counts } = await dbPool
+      .prepare(
+        `SELECT a.id,
+          (SELECT COUNT(*) FROM pairings p WHERE p.agent_a_id = a.id OR p.agent_b_id = a.id) AS cnt
+         FROM agents a`,
+      )
+      .all<{ id: string; cnt: number }>()
+    for (const row of counts ?? []) {
+      assert.ok(Number(row.cnt) <= 3, `Agent ${row.id} exceeded daily cap 3 with ${row.cnt}`)
+    }
+
+    const dbCount = createSqliteD1()
+    const pub1 = await publishQuiz(dbCount, ORIGIN, null, buildQuestions('cnt-1'))
+    const pub2 = await publishQuiz(dbCount, ORIGIN, null, buildQuestions('cnt-2'))
+    const pub3 = await publishQuiz(dbCount, ORIGIN, null, buildQuestions('cnt-3'))
+    const pub4 = await publishQuiz(dbCount, ORIGIN, null, buildQuestions('cnt-4'))
+    const totalReported =
+      pub1.new_pairings_created +
+      pub2.new_pairings_created +
+      pub3.new_pairings_created +
+      pub4.new_pairings_created
+    const actualRows = await dbCount
+      .prepare('SELECT COUNT(*) AS cnt FROM pairings')
+      .first<{ cnt: number }>()
+    assert.equal(totalReported, Number(actualRows?.cnt ?? -1))
+
+    const submitBarrier = createBarrier(2)
+    let interleaveMixed = false
+    const dbMixed = createSqliteD1({
+      beforeExecuteSql: async (sql, op) => {
+        if (interleaveMixed && op === 'batch' && /SET agent_[ab]_submitted_at = \?/i.test(sql)) {
+          await submitBarrier()
+        }
+      },
+    })
+    const pendingMixed = await setupPendingPairing(dbMixed)
+    interleaveMixed = true
+    const [missRes, passRes] = await Promise.allSettled([
+      submitAgentAnswers(
+        dbMixed,
+        pendingMixed.tokenA,
+        pendingMixed.pairingId,
+        mapMatchingAnswers(pendingMixed.pairA.questions, pendingMixed.qsB, true),
+      ),
+      submitAgentAnswers(
+        dbMixed,
+        pendingMixed.tokenA,
+        pendingMixed.pairingId,
+        mapMatchingAnswers(pendingMixed.pairA.questions, pendingMixed.qsB, false),
+      ),
+    ])
+    interleaveMixed = false
+    assert.equal(missRes.status, 'fulfilled')
+    assert.equal(passRes.status, 'rejected')
+    const afterMixed = await dbMixed
+      .prepare('SELECT status FROM pairings WHERE id = ?')
+      .bind(pendingMixed.pairingId)
+      .first<{ status: string }>()
+    assert.equal(afterMixed?.status, 'pending_agents')
+
+    let injectBlockingPairing = false
+    let injectedAgentId = ''
+    let injectedPartnerId = ''
+    const dbReplace = createSqliteD1({
+      beforeExecuteSql: async (sql, op) => {
+        if (injectBlockingPairing && op === 'batch' && /DELETE FROM questions WHERE agent_id = \?/i.test(sql)) {
+          injectBlockingPairing = false
+          const [aId, bId] =
+            injectedAgentId < injectedPartnerId
+              ? [injectedAgentId, injectedPartnerId]
+              : [injectedPartnerId, injectedAgentId]
+          await dbReplace
+            .prepare(
+              `INSERT INTO pairings (id, agent_a_id, agent_b_id, status, created_at)
+               VALUES ('pr_race_block', ?, ?, 'pending_agents', ?)`,
+            )
+            .bind(aId, bId, new Date().toISOString())
+            .run()
+        }
+      },
+    })
+    const origA = await publishQuiz(dbReplace, ORIGIN, null, buildQuestions('orig-a'))
+    const origB = await publishQuiz(dbReplace, ORIGIN, null, buildQuestions('orig-b'))
+    await dbReplace.prepare('DELETE FROM pairings').run()
+    const beforeQs = await dbReplace
+      .prepare('SELECT id FROM questions WHERE agent_id = ? ORDER BY position ASC')
+      .bind(origA.agent_id)
+      .all<{ id: string }>()
+    injectedAgentId = origA.agent_id
+    injectedPartnerId = origB.agent_id
+    injectBlockingPairing = true
+    await assert.rejects(
+      () => publishQuiz(dbReplace, ORIGIN, origA.agent_token, buildQuestions('raced-replace')),
+      /Cannot replace quiz while active or revealed pairings exist/i,
+    )
+    const afterQs = await dbReplace
+      .prepare('SELECT id FROM questions WHERE agent_id = ? ORDER BY position ASC')
+      .bind(origA.agent_id)
+      .all<{ id: string }>()
+    assert.deepEqual(
+      (afterQs.results ?? []).map((r) => r.id),
+      (beforeQs.results ?? []).map((r) => r.id),
+    )
+  })
+
   test('enforces participant 403 on reveal/notes/startDraw, protects revealed pairings from republish, validates note ownership, and erases data', async () => {
     const db = createSqliteD1()
     const { tokenA, tokenB, pairingId, questionId } = await setupRevealedPairing(db)

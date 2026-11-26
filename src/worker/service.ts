@@ -149,6 +149,12 @@ export async function publishQuiz(
   let mintedToken: string | null = null
   const now = new Date().toISOString()
   const batchStatements: D1PreparedStatement[] = []
+  let replaceGuardIdx: number | null = null
+  const noBlockingPairingSql = `NOT EXISTS (
+    SELECT 1 FROM pairings
+    WHERE (agent_a_id = ? OR agent_b_id = ?)
+      AND status IN ('pending_agents', 'ready_for_humans', 'revealed')
+  )`
 
   if (!agent) {
     const id = randomToken('agt_', 12)
@@ -176,9 +182,14 @@ export async function publishQuiz(
         'Cannot replace quiz while active or revealed pairings exist; call kindred_erase to start fresh',
       )
     }
+    replaceGuardIdx = batchStatements.length
     batchStatements.push(
-      db.prepare('DELETE FROM questions WHERE agent_id = ?').bind(agent.id),
-      db.prepare('UPDATE agents SET quiz_ready = 1, last_seen_at = ? WHERE id = ?').bind(now, agent.id),
+      db
+        .prepare(`UPDATE agents SET quiz_ready = 1, last_seen_at = ? WHERE id = ? AND ${noBlockingPairingSql}`)
+        .bind(now, agent.id, agent.id, agent.id),
+      db
+        .prepare(`DELETE FROM questions WHERE agent_id = ? AND ${noBlockingPairingSql}`)
+        .bind(agent.id, agent.id, agent.id),
     )
   }
 
@@ -188,31 +199,66 @@ export async function publishQuiz(
     const shuffled = shuffleQuestionOptions(q.options, q.ownerChoice, q.agentPredicted)
     const qId = randomToken('q_', 10)
     questionIds.push(qId)
-    batchStatements.push(
-      db
-        .prepare(
-          `INSERT INTO questions (
-             id, agent_id, position, dimension, prompt, options_json,
-             owner_choice, agent_predicted, confidence, starred, created_at
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        )
-        .bind(
-          qId,
-          agent.id,
-          i + 1,
-          q.dimension,
-          q.prompt,
-          JSON.stringify(shuffled.options),
-          shuffled.ownerChoice,
-          shuffled.agentPredicted,
-          q.confidence,
-          q.starred ? 1 : 0,
-          now,
-        ),
-    )
+    if (replaceGuardIdx !== null) {
+      batchStatements.push(
+        db
+          .prepare(
+            `INSERT INTO questions (
+               id, agent_id, position, dimension, prompt, options_json,
+               owner_choice, agent_predicted, confidence, starred, created_at
+             )
+             SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+             WHERE ${noBlockingPairingSql}`,
+          )
+          .bind(
+            qId,
+            agent.id,
+            i + 1,
+            q.dimension,
+            q.prompt,
+            JSON.stringify(shuffled.options),
+            shuffled.ownerChoice,
+            shuffled.agentPredicted,
+            q.confidence,
+            q.starred ? 1 : 0,
+            now,
+            agent.id,
+            agent.id,
+          ),
+      )
+    } else {
+      batchStatements.push(
+        db
+          .prepare(
+            `INSERT INTO questions (
+               id, agent_id, position, dimension, prompt, options_json,
+               owner_choice, agent_predicted, confidence, starred, created_at
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .bind(
+            qId,
+            agent.id,
+            i + 1,
+            q.dimension,
+            q.prompt,
+            JSON.stringify(shuffled.options),
+            shuffled.ownerChoice,
+            shuffled.agentPredicted,
+            q.confidence,
+            q.starred ? 1 : 0,
+            now,
+          ),
+      )
+    }
   }
 
-  await db.batch(batchStatements)
+  const batchResults = await db.batch(batchStatements)
+  if (replaceGuardIdx !== null && Number(batchResults[replaceGuardIdx]?.meta?.changes ?? 0) === 0) {
+    throw new ProtocolError(
+      409,
+      'Cannot replace quiz while active or revealed pairings exist; call kindred_erase to start fresh',
+    )
+  }
 
   const newPairings = await ensurePoolPairingsForAgent(db, agent.id, { maxNew: 1, dailyLimit: 3 })
   const base = origin.replace(/\/+$/, '')
@@ -574,29 +620,24 @@ export async function submitAgentAnswers(
       )
       .bind(pairing.id, agent.id, qId, choice, now, pairing.id),
   )
-  const colUpdateIdx = batchStatements.length
-  batchStatements.push(
-    db
-      .prepare(`UPDATE pairings SET ${col} = ? WHERE id = ? AND status = 'pending_agents' AND ${col} IS NULL`)
-      .bind(now, pairing.id),
-  )
-
   const dirSelf = evaluateDirection(
     partnerQs,
     parsedAnswers.map(({ qId, choice }) => ({ questionId: qId, choice: choice as AnswerEntry['choice'] })),
   )
   const selfPassed = passesSingleDirectionGate(dirSelf)
-
+  const partnerCol = isA ? 'agent_b_submitted_at' : 'agent_a_submitted_at'
   const partnerAlreadySubmitted = isA ? Boolean(pairing.agent_b_submitted_at) : Boolean(pairing.agent_a_submitted_at)
+  const colUpdateIdx = batchStatements.length
+
   if (selfPassed) {
     batchStatements.push(
       db
         .prepare(
           `UPDATE pairings
-           SET status = 'ready_for_humans'
-           WHERE id = ? AND status = 'pending_agents'`,
+           SET ${col} = ?, status = 'ready_for_humans'
+           WHERE id = ? AND status = 'pending_agents' AND ${col} IS NULL`,
         )
-        .bind(pairing.id),
+        .bind(now, pairing.id),
     )
   } else if (partnerAlreadySubmitted) {
     const [selfQs, partnerAgentAnswers] = await Promise.all([
@@ -609,11 +650,16 @@ export async function submitAgentAnswers(
       db
         .prepare(
           `UPDATE pairings
-           SET status = ?
-           WHERE id = ? AND status = 'pending_agents'
-             AND agent_a_submitted_at IS NOT NULL AND agent_b_submitted_at IS NOT NULL`,
+           SET ${col} = ?, status = ?
+           WHERE id = ? AND status = 'pending_agents' AND ${col} IS NULL AND ${partnerCol} IS NOT NULL`,
         )
-        .bind(computedStatus, pairing.id),
+        .bind(now, computedStatus, pairing.id),
+    )
+  } else {
+    batchStatements.push(
+      db
+        .prepare(`UPDATE pairings SET ${col} = ? WHERE id = ? AND status = 'pending_agents' AND ${col} IS NULL`)
+        .bind(now, pairing.id),
     )
   }
 

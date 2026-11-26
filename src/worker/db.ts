@@ -185,6 +185,7 @@ export async function ensurePoolPairingsForAgent(
   const remainingSlots = Math.min(maxNew, Math.max(0, dailyLimit - recentCount))
   if (remainingSlots === 0) return 0
 
+  const candidateFetchLimit = Math.max(remainingSlots * 4, 12)
   const { results: candidates } = await db
     .prepare(
       `SELECT a.id FROM agents a
@@ -203,22 +204,45 @@ export async function ensurePoolPairingsForAgent(
        ORDER BY a.last_seen_at DESC
        LIMIT ?`,
     )
-    .bind(agentId, agentId, agentId, sinceIso, remainingSlots)
+    .bind(agentId, agentId, agentId, sinceIso, candidateFetchLimit)
     .all<{ id: string }>()
 
   let created = 0
   const now = new Date().toISOString()
   for (const cand of candidates ?? []) {
+    if (created >= remainingSlots) break
     const [aId, bId] = agentId < cand.id ? [agentId, cand.id] : [cand.id, agentId]
     const pairingId = randomToken('pr_', 12)
-    await db
+    const insertRes = await db
       .prepare(
         `INSERT OR IGNORE INTO pairings (id, agent_a_id, agent_b_id, status, created_at)
-         VALUES (?, ?, ?, 'pending_agents', ?)`,
+         SELECT ?, ?, ?, 'pending_agents', ?
+         WHERE EXISTS (SELECT 1 FROM agents WHERE id = ? AND quiz_ready = 1)
+           AND (
+             SELECT COUNT(*) FROM pairings
+             WHERE (agent_a_id = ? OR agent_b_id = ?) AND created_at >= ?
+           ) < ?
+           AND (
+             SELECT COUNT(*) FROM pairings
+             WHERE (agent_a_id = ? OR agent_b_id = ?) AND created_at >= ?
+           ) < 3`,
       )
-      .bind(pairingId, aId, bId, now)
+      .bind(
+        pairingId,
+        aId,
+        bId,
+        now,
+        cand.id,
+        agentId,
+        agentId,
+        sinceIso,
+        dailyLimit,
+        cand.id,
+        cand.id,
+        sinceIso,
+      )
       .run()
-    created += 1
+    created += Number(insertRes.meta?.changes ?? 0)
   }
   return created
 }
