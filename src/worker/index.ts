@@ -1,6 +1,11 @@
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { renderSkillMarkdown } from '../shared/skillTemplate'
+import {
+  DISCOVERY_LINK_HEADER,
+  injectAgentFallbackHtml,
+  prefersMarkdownResponse,
+} from './agentDiscovery'
 import type { Env } from './env'
 import { createMcpRoutes } from './mcp'
 import { createProtocolRoutes } from './routes/protocol'
@@ -25,11 +30,47 @@ app.use(
   }),
 )
 
-app.get('/skill.md', (c) => {
-  const origin = new URL(c.req.url).origin
-  return c.text(renderSkillMarkdown(origin), 200, {
+function buildMarkdownSkillResponse(origin: string, isHead: boolean, varyHeader?: string): Response {
+  const body = renderSkillMarkdown(origin)
+  const headers: Record<string, string> = {
     'Content-Type': 'text/markdown; charset=utf-8',
     'Cache-Control': 'public, max-age=60',
+    Link: DISCOVERY_LINK_HEADER,
+  }
+  if (varyHeader) headers.Vary = varyHeader
+  return new Response(isHead ? null : body, { status: 200, headers })
+}
+
+app.on(['GET', 'HEAD'], '/skill.md', (c) => {
+  const origin = new URL(c.req.url).origin
+  return buildMarkdownSkillResponse(origin, c.req.method === 'HEAD')
+})
+
+app.on(['GET', 'HEAD'], '/llms.txt', (c) => {
+  const origin = new URL(c.req.url).origin
+  return buildMarkdownSkillResponse(origin, c.req.method === 'HEAD')
+})
+
+app.on(['GET', 'HEAD'], '/', async (c) => {
+  const origin = new URL(c.req.url).origin
+  const isHead = c.req.method === 'HEAD'
+  if (prefersMarkdownResponse(c.req.raw)) {
+    return buildMarkdownSkillResponse(origin, isHead, 'Accept, User-Agent')
+  }
+
+  const assetUrl = new URL('/index.html', c.req.url)
+  const assetRes = await c.env.ASSETS.fetch(new Request(assetUrl.toString(), { method: 'GET' }))
+  if (!assetRes.ok) return assetRes
+  const rawHtml = await assetRes.text()
+  const hydratedHtml = injectAgentFallbackHtml(rawHtml, origin)
+  return new Response(isHead ? null : hydratedHtml, {
+    status: 200,
+    headers: {
+      'Content-Type': 'text/html; charset=utf-8',
+      'Cache-Control': 'public, max-age=0, must-revalidate',
+      Vary: 'Accept, User-Agent',
+      Link: DISCOVERY_LINK_HEADER,
+    },
   })
 })
 

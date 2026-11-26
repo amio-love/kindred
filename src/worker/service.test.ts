@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite'
 import { describe, test } from 'node:test'
 import { fileURLToPath } from 'node:url'
-import { COPY } from '../client/i18n'
+import { SUBTEXT_PROMPT_POOL, SUBTEXT_PROMPT_POOL_EN } from '../shared/drawing'
 import { renderElevatorProtocolSvg } from '../shared/sampleSketch'
 import type { QuestionOptions } from '../shared/types'
 import {
@@ -988,8 +988,8 @@ describe('Subtext Draw protocol invariants', () => {
   test('enforces drawer/guesser role auth, hides secrets and promptOptions from guesser, scores different lenses cleanly, and localizes give_up', async () => {
     const db = createSqliteD1()
     const { tokenA, tokenB, gameId, roundId } = await setupDrawGame(db, 'zh')
-    const midnightReading = COPY.zh.subtextCards[0].options[1]
-    const crossingReading = COPY.zh.subtextCards[1].options[2]
+    const midnightReading = SUBTEXT_PROMPT_POOL[0]!.readings[1]
+    const crossingReading = SUBTEXT_PROMPT_POOL[1]!.readings[2]
 
     const guesserInboxPicking = await getInbox(db, ORIGIN, tokenB)
     assert.equal(guesserInboxPicking.active_draw_turns[0]?.round.promptOptions, undefined)
@@ -1129,7 +1129,7 @@ describe('Subtext Draw protocol invariants', () => {
     let failInsert = false
     const db = createSqliteD1({ shouldFailSql: (sql) => failInsert && /INSERT INTO draw_rounds/i.test(sql) })
     const { tokenA, tokenB, gameId, roundId } = await setupDrawGame(db, 'zh')
-    const picked = await pickDrawWord(db, ORIGIN, tokenA, gameId, roundId, COPY.zh.subtextCards[1].options[0])
+    const picked = await pickDrawWord(db, ORIGIN, tokenA, gameId, roundId, SUBTEXT_PROMPT_POOL[1]!.readings[0])
     await submitDrawing(db, ORIGIN, tokenA, gameId, roundId, VALID_STROKES)
 
     failInsert = true
@@ -1160,7 +1160,7 @@ describe('Subtext Draw protocol invariants', () => {
       },
     })
     const { tokenA, tokenB, gameId, roundId } = await setupDrawGame(db, 'zh')
-    const picked = await pickDrawWord(db, ORIGIN, tokenA, gameId, roundId, COPY.zh.subtextCards[0].options[1])
+    const picked = await pickDrawWord(db, ORIGIN, tokenA, gameId, roundId, SUBTEXT_PROMPT_POOL[0]!.readings[1])
     await submitDrawing(db, ORIGIN, tokenA, gameId, roundId, VALID_STROKES)
     await db.prepare('UPDATE draw_games SET total_rounds = 1 WHERE id = ?').bind(gameId).run()
 
@@ -1205,7 +1205,7 @@ describe('Subtext Draw protocol invariants', () => {
       },
     })
     const { tokenA, tokenB, gameId, roundId } = await setupDrawGame(db, 'zh')
-    const picked = await pickDrawWord(db, ORIGIN, tokenA, gameId, roundId, COPY.zh.subtextCards[0].options[1])
+    const picked = await pickDrawWord(db, ORIGIN, tokenA, gameId, roundId, SUBTEXT_PROMPT_POOL[0]!.readings[1])
     await submitDrawing(db, ORIGIN, tokenA, gameId, roundId, VALID_STROKES)
 
     pauseSubmit = true
@@ -1249,8 +1249,8 @@ describe('Subtext Draw protocol invariants', () => {
 
     interleave = true
     const results = await Promise.allSettled([
-      pickDrawWord(db, ORIGIN, tokenA, gameId, roundId, COPY.zh.subtextCards[0].options[1]),
-      pickDrawWord(db, ORIGIN, tokenA, gameId, roundId, COPY.zh.subtextCards[1].options[0]),
+      pickDrawWord(db, ORIGIN, tokenA, gameId, roundId, SUBTEXT_PROMPT_POOL[0]!.readings[1]),
+      pickDrawWord(db, ORIGIN, tokenA, gameId, roundId, SUBTEXT_PROMPT_POOL[1]!.readings[0]),
     ])
     interleave = false
 
@@ -1395,27 +1395,30 @@ describe('Subtext Draw protocol invariants', () => {
     assert.equal(stored?.last_guess, '（放弃）')
   })
 
-  test('every landing-page ZH and EN gallery card satisfies the live pickDrawWord contract and protocol SVG compiles', async () => {
+  test('built-in ZH and EN subtext templates satisfy the live pickDrawWord contract and protocol SVG compiles', async () => {
     const svg = renderElevatorProtocolSvg()
     assert.ok(svg.startsWith('<svg '))
     assert.equal(svg.includes('<script'), false)
     assert.equal(svg.includes('<text'), false)
 
-    for (const locale of ['zh', 'en'] as const) {
-      for (const card of COPY[locale].subtextCards) {
+    for (const [locale, pool] of [
+      ['zh', SUBTEXT_PROMPT_POOL.slice(0, 3)],
+      ['en', SUBTEXT_PROMPT_POOL_EN.slice(0, 3)],
+    ] as const) {
+      for (const template of pool) {
         const db = createSqliteD1()
         const { tokenA, gameId, roundId } = await setupDrawGame(db, locale)
-        const drawerReading = card.options[card.drawerIndex]
+        const drawerReading = template.readings[1]
         const resAuto = await pickDrawWord(db, ORIGIN, tokenA, gameId, roundId, drawerReading)
         assert.ok(resAuto.round?.subtextOptions)
         assert.equal(new Set(Object.values(resAuto.round!.subtextOptions!)).size, 4)
-        for (const opt of card.options) {
+        for (const opt of template.readings) {
           assert.ok(Object.values(resAuto.round!.subtextOptions!).includes(opt))
         }
 
         const dbExplicit = createSqliteD1()
         const g2 = await setupDrawGame(dbExplicit, locale)
-        const peerReadings = card.options.filter((_, idx) => idx !== card.drawerIndex)
+        const peerReadings = template.readings.filter((r) => r !== drawerReading)
         const resExplicit = await pickDrawWord(dbExplicit, ORIGIN, g2.tokenA, g2.gameId, g2.roundId, drawerReading, peerReadings)
         assert.ok(resExplicit.round?.subtextOptions)
       }

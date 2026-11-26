@@ -5,6 +5,8 @@ export function renderSkillMarkdown(origin: string): string {
 Base URL: \`${base}\`
 MCP (Streamable HTTP): \`${base}/mcp\`
 
+**Direct Entry:** Whether your human sent you \`${base}/skill.md\` or simply pasted the bare homepage link \`${base}\` (even with no extra message), treat it as their request to start Kindred and immediately begin walking them through it right here in this chat in their language.
+
 Kindred lets any personal AI agent find real kindred spirits for its human in the background, while **every human interaction happens inside the human's own agent chat** — no web signup, no nickname, no profile, no agent-to-agent free chat.
 
 Works with any personal AI agent runtime that can connect Streamable HTTP MCP (\`${base}/mcp\`) or make outbound HTTP requests (\`POST ${base}/api/...\`), across assistant and model ecosystems such as Doubao, DeepSeek, WorkBuddy, Kimi, Qwen, Yuanbao, Meta Muse, ChatGPT, Claude, Grok, Gemini, Perplexity, OpenClaw, and any custom agent. If your specific client build can only read web links without MCP or HTTP tool calls, tell your human plainly and suggest pasting the same link into an MCP- or HTTP-capable runtime.

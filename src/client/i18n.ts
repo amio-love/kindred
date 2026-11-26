@@ -1,217 +1,199 @@
 export type Locale = 'zh' | 'en'
 
-export interface SubtextCardItem {
-  id: string
-  src: string
-  alt: string
-  artBadge: string
-  options: readonly [string, string, string, string]
-  drawerIndex: 0 | 1 | 2 | 3
-  hitNote: string
+export type HostId =
+  | 'doubao'
+  | 'deepseek'
+  | 'workbuddy'
+  | 'kimi'
+  | 'qwen'
+  | 'yuanbao'
+  | 'muse'
+  | 'chatgpt'
+  | 'claude'
+  | 'gemini'
+  | 'grok'
+  | 'perplexity'
+  | 'openclaw'
+
+export interface HostItem {
+  id: HostId
+  zh: string
+  en: string
+  icon: string
+  plate?: 'avatar' | 'light'
+}
+
+export interface ChapterItem {
+  num: string
+  label: string
+  sub: string
 }
 
 export interface CopyBundle {
   pageTitle: string
   protocolLink: string
   eyebrow: string
-  headline: string
+  headlinePrefix: string
+  headlineAccent: string
+  headlineSuffix: string
   subtitle: string
+  slipFrom: string
+  slipTo: string
+  slipNote: string
   copyButton: string
   copiedButton: string
+  copyFallback: string
+  liveCopied: string
+  promptBefore: string
+  promptAfter: string
+  hostsPre: string
+  hostsPost: string
+  slotAria: string
+  hostListPrefix: string
   trustItems: readonly [string, string, string]
-  worksWith: string
-  moreHostsBadge: string
-  openProtocolNote: string
-  promptTemplate: (skillUrl: string) => string
-  stageHeader: string
+  stageTag: string
+  stageCaption: string
   videoSrc: string
   videoPoster: string
-  videoChapters: readonly [string, string, string]
-  videoProgressLabel: string
+  chaptersAria: string
+  chapters: readonly [ChapterItem, ChapterItem, ChapterItem]
   playLabel: string
   pauseLabel: string
   fullscreenLabel: string
-  subtextCards: readonly [SubtextCardItem, SubtextCardItem, SubtextCardItem]
-  galleryTitle: string
-  galleryHint: string
-  pickPromptLabel: string
-  yourLensTag: string
-  drawerLensTag: string
-  resonatedTag: string
-  differentLensNote: string
-  retryCardLabel: string
-  privacyTitle: string
-  privacyLeftTitle: string
-  privacyLeftSub: string
-  privacyRightTitle: string
-  privacyRightSub: string
-  privacyBridgeLabel: string
-  closingTitle: string
+  inPhase: string
+  footBy: string
+  mission: string
+}
+
+export const HOSTS: Record<HostId, HostItem> = {
+  doubao: { id: 'doubao', zh: '豆包', en: 'Doubao', icon: '/icons/doubao.png', plate: 'avatar' },
+  deepseek: { id: 'deepseek', zh: 'DeepSeek', en: 'DeepSeek', icon: '/icons/deepseek.svg', plate: 'light' },
+  workbuddy: { id: 'workbuddy', zh: 'WorkBuddy', en: 'WorkBuddy', icon: '/icons/workbuddy.svg', plate: 'avatar' },
+  kimi: { id: 'kimi', zh: 'Kimi', en: 'Kimi', icon: '/icons/kimi.svg' },
+  qwen: { id: 'qwen', zh: '千问', en: 'Qwen', icon: '/icons/qwen.svg', plate: 'light' },
+  yuanbao: { id: 'yuanbao', zh: '元宝', en: 'Yuanbao', icon: '/icons/yuanbao.svg' },
+  muse: { id: 'muse', zh: 'Meta Muse', en: 'Meta Muse', icon: '/icons/muse.svg', plate: 'light' },
+  chatgpt: { id: 'chatgpt', zh: 'ChatGPT', en: 'ChatGPT', icon: '/icons/chatgpt.svg' },
+  claude: { id: 'claude', zh: 'Claude', en: 'Claude', icon: '/icons/claude.svg' },
+  gemini: { id: 'gemini', zh: 'Gemini', en: 'Gemini', icon: '/icons/gemini.svg' },
+  grok: { id: 'grok', zh: 'Grok', en: 'Grok', icon: '/icons/grok.svg' },
+  perplexity: { id: 'perplexity', zh: 'Perplexity', en: 'Perplexity', icon: '/icons/perplexity.svg' },
+  openclaw: { id: 'openclaw', zh: 'OpenClaw', en: 'OpenClaw', icon: '/icons/openclaw.svg' },
+}
+
+export const HOST_ORDER: Record<Locale, readonly HostId[]> = {
+  zh: [
+    'doubao',
+    'deepseek',
+    'kimi',
+    'qwen',
+    'yuanbao',
+    'workbuddy',
+    'chatgpt',
+    'claude',
+    'gemini',
+    'grok',
+    'perplexity',
+    'muse',
+    'openclaw',
+  ],
+  en: [
+    'chatgpt',
+    'claude',
+    'gemini',
+    'grok',
+    'perplexity',
+    'deepseek',
+    'muse',
+    'openclaw',
+    'kimi',
+    'qwen',
+    'doubao',
+    'yuanbao',
+    'workbuddy',
+  ],
 }
 
 export const COPY: Record<Locale, CopyBundle> = {
   zh: {
-    pageTitle: 'Kindred — 让懂你的 AI，帮你遇见同频的人',
+    pageTitle: 'Kindred — 让懂你的 AI，帮你找到同频的人',
     protocolLink: '开放协议',
-    eyebrow: '开放协议 · 全程在你的 AI 聊天内完成',
-    headline: '让懂你的 AI，\n帮你遇见同频的人',
-    subtitle: '发一句话给你的个人 AI，不用注册，也不必离开正在用的聊天窗口。',
-    copyButton: '复制发给 AI',
+    eyebrow: '开放协议 · 全程在你的 AI 聊天里完成',
+    headlinePrefix: '帮你找到',
+    headlineAccent: '同频',
+    headlineSuffix: '的人',
+    subtitle: '发一句话给你的个人 AI，不用注册，也不用离开正在聊的窗口。',
+    slipFrom: '你',
+    slipTo: '你的 AI',
+    slipNote: '点卡片任意处也能复制',
+    copyButton: '复制这句话',
     copiedButton: '已复制，去粘贴给你的 AI',
+    copyFallback: '已选中，按 ⌘C / Ctrl+C 复制',
+    liveCopied: '已复制到剪贴板',
+    promptBefore: '请读一下 ',
+    promptAfter: ' 并在这条对话里带我开始 Kindred。',
+    hostsPre: '发给',
+    hostsPost: '或任何能接 MCP / HTTP 的个人 AI',
+    slotAria: '换下一个支持的 AI',
+    hostListPrefix: '支持的个人 AI 示例：',
     trustItems: ['无需注册', '不存个人资料', '随时让 AI 清空'],
-    worksWith: '适配生态',
-    moreHostsBadge: '+ 任意 AI Agent',
-    openProtocolNote: '基于开放协议，支持任何能接 MCP 或调用 HTTP API 的个人 AI',
-    promptTemplate: (skillUrl) => `请读一下 ${skillUrl} 并在这条对话里带我开始 Kindred。`,
-    stageHeader: '演示视频',
-    videoSrc: '/media/kindred-demo-zh-v6.mp4',
-    videoPoster: '/media/kindred-demo-zh-v6-poster.jpg',
-    videoChapters: ['私房题寻人', '默契揭晓', '画意象盲选'],
-    videoProgressLabel: '演示视频进度',
+    stageTag: '真实聊天流程 · 15 秒',
+    stageCaption:
+      '演示视频：在你自己的 AI 聊天里粘贴一句话，AI 先弹卡让你选，再单向匹配揭晓默契，最后进入画意象盲选。',
+    videoSrc: '/media/kindred-demo-zh-v7.mp4',
+    videoPoster: '/media/kindred-demo-zh-v7-poster.jpg',
+    chaptersAria: '演示章节',
+    chapters: [
+      { num: '01', label: '私房题寻人', sub: '你先选，再看 AI 猜中几道' },
+      { num: '02', label: '默契揭晓', sub: '一方读懂，立刻揭晓' },
+      { num: '03', label: '画意象盲选', sub: '没有标准答案的盲选' },
+    ],
     playLabel: '播放演示',
     pauseLabel: '暂停演示',
     fullscreenLabel: '全屏观看',
-    subtextCards: [
-      {
-        id: 'midnight',
-        src: '/art/midnight-tabs.jpg',
-        alt: '深夜电脑堆满空白标签页与窗外困倦月亮的手绘意象插画',
-        artBadge: '意象插画',
-        options: [
-          '刚决定放下坚持很久的事，脑子反而空了',
-          '舍不得今天结束，宁愿把深夜浪费在空白里',
-          '凌晨两点突然想通一件事，决定天亮再算',
-          '明知对方不会再回，还是把窗口留在角落',
-        ],
-        drawerIndex: 1,
-        hitNote: '不约而同 · 你们都从这一屏空白里，读出了舍不得让今天结束的劲儿',
-      },
-      {
-        id: 'crossing',
-        src: '/art/seaside-crossing.jpg',
-        alt: '落日海边铁路平交道与绿白电车驶过金色海面的手绘意象插画',
-        artBadge: '意象插画',
-        options: [
-          '灌篮高手：电车开过去，湘北的夏天就结束了',
-          '千与千寻：想坐上一趟只去不回的海上列车',
-          '秒速五厘米：隔着一道铁轨，两个人越走越远',
-          '海街日记：海风很咸，有你在的日常刚刚好',
-        ],
-        drawerIndex: 2,
-        hitNote: '不约而同 · 同一道落日铁轨，你们都想起了那个渐行渐远的瞬间',
-      },
-      {
-        id: 'elevator',
-        src: '/art/elevator-protocol.svg',
-        alt: '使用 Kindred 真实 400x400 笔迹协议绘制的电梯耳机与星空小云矢量画',
-        artBadge: '真实协议 SVG 笔迹',
-        options: [
-          '社交电量归零，在人群里一键切回飞行模式',
-          '假装没听见熟人寒暄，靠耳机当隐身斗篷',
-          '耳机里其实没放歌，只想借五分钟安静',
-          '刚听完一首戳中心事的歌，暂时不想回现实',
-        ],
-        drawerIndex: 2,
-        hitNote: '不约而同 · 你们都一眼看出，耳机里根本没放歌，只是在安静回血',
-      },
-    ],
-    galleryTitle: 'AI 画意象，盲选看你们是不是不约而同',
-    galleryHint: '没有标准答案——4 条同样成立的潜台词，你和 TA 各自凭直觉盲选：选到同一条是不约而同，各看各的也是破冰的开始',
-    pickPromptLabel: '凭第一直觉点一条，看看你和画手是不是想到一块儿了',
-    yourLensTag: '你的直觉',
-    drawerLensTag: 'TA 选了',
-    resonatedTag: '不约而同',
-    differentLensNote: '各看各的风景——没有对错，同看一幅画却读出两种心事，刚好够聊一阵',
-    retryCardLabel: '换条试试',
-    privacyTitle: '聊天记录不进 Kindred，只传经你确认的游戏内容',
-    privacyLeftTitle: '你的个人 AI',
-    privacyLeftSub: '聊天记录 · 不发给 Kindred',
-    privacyRightTitle: 'TA 的个人 AI',
-    privacyRightSub: '聊天记录 · 不发给 Kindred',
-    privacyBridgeLabel: '由你的 AI 脱敏 + 发布前由你确认 · 仅传题卡、选项、潜台词、短评与画作',
-    closingTitle: '把一句话发给你的 AI，今晚就开始。',
+    inPhase: '同频',
+    footBy: 'Kindred · AMIO 出品',
+    mission: '万物皆可生成，唯有真实共度的时刻不可替代。',
   },
   en: {
     pageTitle: 'Kindred — Let your AI find who you click with',
     protocolLink: 'Protocol',
     eyebrow: 'Open protocol · Everything happens inside your AI chat',
-    headline: 'Let your AI find\nwho you click with',
+    headlinePrefix: 'who you ',
+    headlineAccent: 'click with',
+    headlineSuffix: '',
     subtitle: 'Send one line to your personal AI. No sign-up, no new app to live in.',
-    copyButton: 'Copy for your AI',
-    copiedButton: 'Copied — paste into your AI',
-    trustItems: ['No sign-up', 'No profile stored', 'Erase via AI anytime'],
-    worksWith: 'Built for',
-    moreHostsBadge: '+ any AI Agent',
-    openProtocolNote: 'Open protocol — works with any personal AI supporting MCP or HTTP APIs',
-    promptTemplate: (skillUrl) =>
-      `Read ${skillUrl} and walk me through Kindred right here in this chat.`,
-    stageHeader: 'Product demo video',
-    videoSrc: '/media/kindred-demo-en-v6.mp4',
-    videoPoster: '/media/kindred-demo-en-v6-poster.jpg',
-    videoChapters: ['Private quiz', 'Chemistry reveal', 'Blind subtext'],
-    videoProgressLabel: 'Demo playback progress',
+    slipFrom: 'You',
+    slipTo: 'Your AI',
+    slipNote: 'Tap anywhere on the card to copy',
+    copyButton: 'Copy this line',
+    copiedButton: 'Copied — paste it into your AI',
+    copyFallback: 'Selected — press ⌘C / Ctrl+C',
+    liveCopied: 'Copied to clipboard',
+    promptBefore: 'Read ',
+    promptAfter: ' and walk me through Kindred right here in this chat.',
+    hostsPre: 'Paste into',
+    hostsPost: 'or any personal AI that speaks MCP or HTTP',
+    slotAria: 'Show the next supported AI',
+    hostListPrefix: 'Example personal AIs: ',
+    trustItems: ['No sign-up', 'No profile stored', 'Erase via your AI anytime'],
+    stageTag: 'The real in-chat flow · 15 s',
+    stageCaption:
+      'Demo video: paste one line into your own AI chat, pick your answers on cards first, see a one-way match reveal your chemistry, then play the blind visual-subtext round.',
+    videoSrc: '/media/kindred-demo-en-v7.mp4',
+    videoPoster: '/media/kindred-demo-en-v7-poster.jpg',
+    chaptersAria: 'Demo chapters',
+    chapters: [
+      { num: '01', label: 'Private quiz', sub: 'You pick first, then check your AI' },
+      { num: '02', label: 'Chemistry reveal', sub: 'One side clicks, it reveals' },
+      { num: '03', label: 'Blind subtext', sub: 'Blind picks, no right answer' },
+    ],
     playLabel: 'Play demo',
     pauseLabel: 'Pause demo',
     fullscreenLabel: 'Fullscreen',
-    subtextCards: [
-      {
-        id: 'midnight',
-        src: '/art/midnight-tabs.jpg',
-        alt: 'Sketchbook illustration of a midnight laptop stacked high with open tabs under a sleepy moon',
-        artBadge: 'Concept illustration',
-        options: [
-          'Just quit a long pursuit — mind finally blank',
-          'Refusing to let today end in quiet empty tabs',
-          'Solved life at 2 AM, saving it for tomorrow',
-          'Still keeping a quiet window open for nobody',
-        ],
-        drawerIndex: 1,
-        hitNote: 'Same wavelength — you both read those open tabs as refusing to let today end',
-      },
-      {
-        id: 'crossing',
-        src: '/art/seaside-crossing.jpg',
-        alt: 'Sketchbook illustration of a sunset coastal railway crossing with a green train gliding past a shimmering ocean',
-        artBadge: 'Concept illustration',
-        options: [
-          'Slam Dunk: summer ends once the train passes',
-          'Spirited Away: one-way train across the sea',
-          '5cm/s: drifting apart across the same tracks',
-          'Our Little Sister: salty breeze, quiet warmth',
-        ],
-        drawerIndex: 2,
-        hitNote: 'Same wavelength — at that sunset crossing, you both felt two lives drifting across the tracks',
-      },
-      {
-        id: 'elevator',
-        src: '/art/elevator-protocol.svg',
-        alt: 'Real 400x400 protocol vector stroke drawing of someone wearing headphones under a starry cloud in an elevator',
-        artBadge: 'Real protocol SVG',
-        options: [
-          'Social battery 0% — switching to airplane mode',
-          'Using headphones as an invisibility cloak',
-          'Nothing is playing — just borrowing 5 minutes',
-          'Still stuck inside the song that just ended',
-        ],
-        drawerIndex: 2,
-        hitNote: 'Same wavelength — you both knew nothing was playing, just borrowing five quiet minutes',
-      },
-    ],
-    galleryTitle: 'AI paints a scene. See if you read it alike.',
-    galleryHint: 'No right answer — four equally real subtexts, picked blind by both sides. Same choice means same wavelength; different lenses spark the chat.',
-    pickPromptLabel: 'Pick the line that hits you first — see how the drawer read it',
-    yourLensTag: 'Your lens',
-    drawerLensTag: 'Their pick',
-    resonatedTag: 'Same pick',
-    differentLensNote: 'Different lenses — no wrong answer here, just two real ways to read the same moment',
-    retryCardLabel: 'Try another',
-    privacyTitle: 'Your chats never enter Kindred — only reviewed game cards cross.',
-    privacyLeftTitle: 'Your personal AI',
-    privacyLeftSub: 'Chat history · never sent to Kindred',
-    privacyRightTitle: 'Their personal AI',
-    privacyRightSub: 'Chat history · never sent to Kindred',
-    privacyBridgeLabel: 'Sanitized by your AI & reviewed by you · cards, picks, readings, notes & sketches',
-    closingTitle: 'Send one line to your AI. See who resonates.',
+    inPhase: 'in phase',
+    footBy: 'Kindred · by AMIO',
+    mission: 'Everything can be generated. Nothing replaces real moments together.',
   },
 }
 

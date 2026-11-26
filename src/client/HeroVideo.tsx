@@ -1,264 +1,268 @@
-import { useEffect, useRef, useState, type KeyboardEvent, type MouseEvent } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { CopyBundle, Locale } from './i18n'
 
 interface HeroVideoProps {
   locale: Locale
   copy: CopyBundle
-  onResonanceBoost?: (boost: number) => void
 }
 
-const CHAPTER_STARTS = [0, 8.15, 10.0] as const
-const TOTAL_DURATION = 15
+const CHAPTER_MARKS = [0, 7.45, 9.6] as const
 
-export default function HeroVideo({ locale, copy, onResonanceBoost }: HeroVideoProps) {
+interface WebKitFullscreenVideo extends HTMLVideoElement {
+  webkitEnterFullscreen?: () => void
+}
+
+export default function HeroVideo({ locale, copy }: HeroVideoProps) {
+  const stageRef = useRef<HTMLElement | null>(null)
+  const frameRef = useRef<HTMLDivElement | null>(null)
   const videoRef = useRef<HTMLVideoElement | null>(null)
-  const chapterRefs = useRef<Array<HTMLButtonElement | null>>([])
-  const [playing, setPlaying] = useState(true)
-  const [progress, setProgress] = useState(0)
+  const fillRefs = useRef<Array<HTMLSpanElement | null>>([null, null, null])
+  const userPausedRef = useRef(false)
+  const inViewRef = useRef(true)
+
+  const [isPaused, setIsPaused] = useState(true)
   const [activeChapter, setActiveChapter] = useState(0)
 
-  useEffect(() => {
-    const video = videoRef.current
-    if (!video) return
+  const paint = useCallback(() => {
+    const v = videoRef.current
+    if (!v) return
+    const dur = Number.isFinite(v.duration) && v.duration > 0 ? v.duration : 15
+    const time = v.currentTime || 0
+    let current = 0
+    for (let i = 0; i < CHAPTER_MARKS.length; i += 1) {
+      const mark = CHAPTER_MARKS[i] ?? 0
+      if (time >= mark - 0.01) current = i
+    }
+    setActiveChapter((prev) => (prev === current ? prev : current))
+    for (let i = 0; i < CHAPTER_MARKS.length; i += 1) {
+      const a = CHAPTER_MARKS[i] ?? 0
+      const b = CHAPTER_MARKS[i + 1] ?? dur
+      const progress = Math.max(0, Math.min(1, (time - a) / Math.max(0.01, b - a)))
+      const fill = fillRefs.current[i]
+      if (fill) fill.style.setProperty('--p', progress.toFixed(4))
+    }
+  }, [])
 
-    const reduced =
+  const tryPlay = useCallback(() => {
+    const v = videoRef.current
+    if (!v || userPausedRef.current || !inViewRef.current) return
+    const promise = v.play()
+    if (promise && typeof promise.catch === 'function') {
+      promise.catch(() => setIsPaused(true))
+    }
+  }, [])
+
+  useEffect(() => {
+    const prefersReduced =
       typeof window !== 'undefined' &&
       window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    userPausedRef.current = prefersReduced
 
-    video.currentTime = 0
-    if (reduced) {
-      video.pause()
-      setPlaying(false)
-      return
+    const v = videoRef.current
+    if (!v) return
+
+    let raf = 0
+    const loop = () => {
+      paint()
+      raf = window.requestAnimationFrame(loop)
     }
 
-    const playPromise = video.play()
-    if (playPromise && typeof playPromise.catch === 'function') {
-      playPromise.catch(() => {
-        setPlaying(false)
-      })
+    const onPlay = () => {
+      setIsPaused(false)
+      window.cancelAnimationFrame(raf)
+      raf = window.requestAnimationFrame(loop)
     }
-  }, [locale])
+    const onPause = () => {
+      setIsPaused(true)
+      window.cancelAnimationFrame(raf)
+      paint()
+    }
+    const onSeeked = () => paint()
+    const onEnded = () => {
+      try {
+        v.currentTime = 0
+      } catch {
+      }
+      tryPlay()
+    }
+
+    v.addEventListener('play', onPlay)
+    v.addEventListener('pause', onPause)
+    v.addEventListener('seeked', onSeeked)
+    v.addEventListener('ended', onEnded)
+
+    let observer: IntersectionObserver | null = null
+    if (stageRef.current && 'IntersectionObserver' in window) {
+      observer = new IntersectionObserver(
+        (entries) => {
+          inViewRef.current = entries[entries.length - 1]?.isIntersecting ?? true
+          if (!inViewRef.current && !v.paused) {
+            v.pause()
+          } else if (inViewRef.current && v.paused && !userPausedRef.current) {
+            tryPlay()
+          }
+        },
+        { threshold: 0.25 },
+      )
+      observer.observe(stageRef.current)
+    }
+
+    return () => {
+      window.cancelAnimationFrame(raf)
+      v.removeEventListener('play', onPlay)
+      v.removeEventListener('pause', onPause)
+      v.removeEventListener('seeked', onSeeked)
+      v.removeEventListener('ended', onEnded)
+      observer?.disconnect()
+    }
+  }, [paint, tryPlay])
 
   useEffect(() => {
-    let rafId = 0
-    let lastChapter = -1
-
-    const sync = () => {
-      const video = videoRef.current
-      if (video) {
-        const dur = Number.isFinite(video.duration) && video.duration > 0 ? video.duration : TOTAL_DURATION
-        const cur = video.currentTime
-        setProgress(Math.min(1, Math.max(0, cur / dur)))
-
-        const chapter = cur >= CHAPTER_STARTS[2] ? 2 : cur >= CHAPTER_STARTS[1] ? 1 : 0
-        if (chapter !== lastChapter) {
-          lastChapter = chapter
-          setActiveChapter(chapter)
-          onResonanceBoost?.(chapter === 1 ? 0.92 : chapter === 2 ? 0.6 : 0.25)
-        }
+    const v = videoRef.current
+    if (!v) return
+    const resumeAt = v.currentTime || 0
+    v.poster = copy.videoPoster
+    v.src = copy.videoSrc
+    const onLoaded = () => {
+      try {
+        const cap = Math.max(0, (v.duration || 15) - 0.2)
+        v.currentTime = Math.min(resumeAt, cap)
+      } catch {
       }
-      rafId = window.requestAnimationFrame(sync)
+      tryPlay()
+      paint()
     }
+    v.addEventListener('loadedmetadata', onLoaded, { once: true })
+    v.load()
+    paint()
+    return () => {
+      v.removeEventListener('loadedmetadata', onLoaded)
+    }
+  }, [locale, copy.videoSrc, copy.videoPoster, paint, tryPlay])
 
-    rafId = window.requestAnimationFrame(sync)
-    return () => window.cancelAnimationFrame(rafId)
-  }, [onResonanceBoost])
-
-  const togglePlay = () => {
-    const video = videoRef.current
-    if (!video) return
-    if (video.paused) {
-      video.play().catch(() => {})
-      setPlaying(true)
+  const handleTogglePlay = useCallback(() => {
+    const v = videoRef.current
+    if (!v) return
+    if (v.paused) {
+      userPausedRef.current = false
+      inViewRef.current = true
+      v.play().catch(() => {})
     } else {
-      video.pause()
-      setPlaying(false)
+      userPausedRef.current = true
+      v.pause()
     }
-  }
+  }, [])
 
-  const seekToChapter = (idx: number) => {
-    const video = videoRef.current
-    if (!video) return
-    video.currentTime = CHAPTER_STARTS[idx] ?? 0
-    if (video.paused) {
-      video.play().catch(() => {})
-      setPlaying(true)
+  const handleChapter = useCallback(
+    (index: number) => {
+      const v = videoRef.current
+      if (!v) return
+      try {
+        const mark = CHAPTER_MARKS[index] ?? 0
+        v.currentTime = mark + (index === 0 ? 0 : 0.01)
+      } catch {
+      }
+      userPausedRef.current = false
+      v.play().catch(() => {})
+      paint()
+    },
+    [paint],
+  )
+
+  const handleFullscreen = useCallback(() => {
+    const frame = frameRef.current
+    const v = videoRef.current as WebKitFullscreenVideo | null
+    if (!frame || !v) return
+    if (document.fullscreenElement) {
+      document.exitFullscreen().catch(() => {})
+      return
     }
-  }
-
-  const handleChapterKeyDown = (event: KeyboardEvent<HTMLButtonElement>, idx: number) => {
-    const count = copy.videoChapters.length
-    let nextIdx: number | null = null
-    if (event.key === 'ArrowRight') nextIdx = (idx + 1) % count
-    else if (event.key === 'ArrowLeft') nextIdx = (idx - 1 + count) % count
-    else if (event.key === 'Home') nextIdx = 0
-    else if (event.key === 'End') nextIdx = count - 1
-    if (nextIdx === null) return
-    event.preventDefault()
-    seekToChapter(nextIdx)
-    chapterRefs.current[nextIdx]?.focus()
-  }
-
-  const handleProgressClick = (event: MouseEvent<HTMLDivElement>) => {
-    const video = videoRef.current
-    if (!video) return
-    const rect = event.currentTarget.getBoundingClientRect()
-    const ratio = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width))
-    const dur = Number.isFinite(video.duration) && video.duration > 0 ? video.duration : TOTAL_DURATION
-    video.currentTime = ratio * dur
-  }
-
-  const handleScrubberKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    const video = videoRef.current
-    if (!video) return
-    const dur = Number.isFinite(video.duration) && video.duration > 0 ? video.duration : TOTAL_DURATION
-    if (event.key === 'ArrowRight') {
-      event.preventDefault()
-      video.currentTime = Math.min(dur, video.currentTime + 1)
-    } else if (event.key === 'ArrowLeft') {
-      event.preventDefault()
-      video.currentTime = Math.max(0, video.currentTime - 1)
-    } else if (event.key === 'Home') {
-      event.preventDefault()
-      video.currentTime = 0
-    } else if (event.key === 'End') {
-      event.preventDefault()
-      video.currentTime = Math.max(0, dur - 0.1)
+    if (frame.requestFullscreen) {
+      frame.requestFullscreen().catch(() => {
+        v.webkitEnterFullscreen?.()
+      })
+    } else {
+      v.webkitEnterFullscreen?.()
     }
-  }
-
-  const handleFullscreen = () => {
-    const video = videoRef.current as
-      | (HTMLVideoElement & { webkitEnterFullscreen?: () => void })
-      | null
-    if (!video) return
-    if (typeof video.requestFullscreen === 'function') {
-      video.requestFullscreen().catch(() => {})
-    } else if (typeof video.webkitEnterFullscreen === 'function') {
-      video.webkitEnterFullscreen()
-    }
-  }
-
-  const currentSeconds = Math.round(progress * TOTAL_DURATION)
+  }, [])
 
   return (
-    <div className="stage">
-      <div className="stage-aura" aria-hidden="true" />
-      <div className="cinema-shell">
-        <div className="cinema-viewport" onClick={togglePlay}>
-          <video
-            key={copy.videoSrc}
-            ref={videoRef}
-            className="cinema-video"
-            src={copy.videoSrc}
-            poster={copy.videoPoster}
-            autoPlay
-            muted
-            loop
-            playsInline
-            preload="auto"
-            onPlay={() => setPlaying(true)}
-            onPause={() => setPlaying(false)}
-          />
-          {!playing && (
-            <div className="cinema-paused-overlay" aria-hidden="true">
-              <span className="cinema-play-circle">
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
-                  <path d="M8 5.5v13l11-6.5-11-6.5z" />
-                </svg>
-              </span>
-            </div>
-          )}
-        </div>
-
-        <div className="cinema-dock">
-          <div
-            className="cinema-scrubber"
-            role="slider"
-            tabIndex={0}
-            aria-label={copy.videoProgressLabel}
-            aria-valuemin={0}
-            aria-valuemax={TOTAL_DURATION}
-            aria-valuenow={currentSeconds}
-            aria-valuetext={`${currentSeconds}s / ${TOTAL_DURATION}s`}
-            onClick={handleProgressClick}
-            onKeyDown={handleScrubberKeyDown}
+    <figure ref={stageRef} className={`stage${isPaused ? ' is-paused' : ''}`}>
+      <div className="stage__glow" aria-hidden="true" />
+      <div ref={frameRef} className="stage__frame">
+        <video
+          ref={videoRef}
+          muted
+          playsInline
+          preload="metadata"
+          disablePictureInPicture
+          onClick={handleTogglePlay}
+        />
+        <div className="stage__label">
+          <button
+            type="button"
+            className="ctl"
+            aria-label={isPaused ? copy.playLabel : copy.pauseLabel}
+            onClick={handleTogglePlay}
           >
-            <div className="cinema-scrubber-fill" style={{ transform: `scaleX(${progress})` }} />
-          </div>
-
-          <div className="cinema-bar">
-            <div className="cinema-chapters" role="tablist" aria-label={copy.stageHeader}>
-              {copy.videoChapters.map((label, idx) => {
-                const isActive = idx === activeChapter
-                return (
-                  <button
-                    key={label}
-                    ref={(el) => {
-                      chapterRefs.current[idx] = el
-                    }}
-                    type="button"
-                    role="tab"
-                    tabIndex={isActive ? 0 : -1}
-                    aria-selected={isActive}
-                    className={`cinema-chapter ${isActive ? 'cinema-chapter--active' : ''}`}
-                    onClick={() => seekToChapter(idx)}
-                    onKeyDown={(event) => handleChapterKeyDown(event, idx)}
-                  >
-                    <span className="cinema-chapter-dot" aria-hidden="true" />
-                    <span>{label}</span>
-                  </button>
-                )
-              })}
-            </div>
-
-            <div className="cinema-actions">
-              <button
-                type="button"
-                className="cinema-icon-btn"
-                aria-label={playing ? copy.pauseLabel : copy.playLabel}
-                title={playing ? copy.pauseLabel : copy.playLabel}
-                onClick={togglePlay}
-              >
-                {playing ? (
-                  <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor">
-                    <rect x="6" y="5" width="4.5" height="14" rx="1.2" />
-                    <rect x="13.5" y="5" width="4.5" height="14" rx="1.2" />
-                  </svg>
-                ) : (
-                  <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor">
-                    <path d="M8 5.5v13l11-6.5-11-6.5z" />
-                  </svg>
-                )}
-              </button>
-              <button
-                type="button"
-                className="cinema-icon-btn"
-                aria-label={copy.fullscreenLabel}
-                title={copy.fullscreenLabel}
-                onClick={handleFullscreen}
-              >
-                <svg
-                  width="15"
-                  height="15"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2.1"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                >
-                  <path d="M8 3H5a2 2 0 0 0-2 2v3" />
-                  <path d="M21 8V5a2 2 0 0 0-2-2h-3" />
-                  <path d="M3 16v3a2 2 0 0 0 2 2h3" />
-                  <path d="M16 21h3a2 2 0 0 0 2-2v-3" />
-                </svg>
-              </button>
-            </div>
-          </div>
+            <svg className="i-play" viewBox="0 0 16 16" aria-hidden="true">
+              <path
+                d="M4.5 2.8v10.4a.6.6 0 0 0 .9.5l8.4-5.2a.6.6 0 0 0 0-1L5.4 2.3a.6.6 0 0 0-.9.5z"
+                fill="currentColor"
+              />
+            </svg>
+            <svg className="i-pause" viewBox="0 0 16 16" aria-hidden="true">
+              <rect x="3.5" y="2.5" width="3" height="11" rx="1" fill="currentColor" />
+              <rect x="9.5" y="2.5" width="3" height="11" rx="1" fill="currentColor" />
+            </svg>
+          </button>
+          <span className="stage__tag">
+            <i />
+            <span>{copy.stageTag}</span>
+          </span>
         </div>
+        <button
+          type="button"
+          className="ctl stage__fs"
+          aria-label={copy.fullscreenLabel}
+          onClick={handleFullscreen}
+        >
+          <svg viewBox="0 0 16 16" aria-hidden="true">
+            <path
+              d="M2.5 6V3.5a1 1 0 0 1 1-1H6M10 2.5h2.5a1 1 0 0 1 1 1V6M13.5 10v2.5a1 1 0 0 1-1 1H10M6 13.5H3.5a1 1 0 0 1-1-1V10"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.6"
+              strokeLinecap="round"
+            />
+          </svg>
+        </button>
       </div>
-    </div>
+      <figcaption className="sr">{copy.stageCaption}</figcaption>
+      <div className="chapters" role="group" aria-label={copy.chaptersAria}>
+        {copy.chapters.map((chapter, idx) => (
+          <button
+            key={chapter.num}
+            type="button"
+            className={`chap${activeChapter === idx ? ' is-on' : ''}`}
+            onClick={() => handleChapter(idx)}
+          >
+            <span className="chap__bar">
+              <span
+                ref={(el) => {
+                  fillRefs.current[idx] = el
+                }}
+                className="chap__fill"
+              />
+            </span>
+            <span className="chap__row">
+              <span className="chap__num">{chapter.num}</span>
+              <span className="chap__label">{chapter.label}</span>
+            </span>
+            <span className="chap__sub">{chapter.sub}</span>
+          </button>
+        ))}
+      </div>
+    </figure>
   )
 }

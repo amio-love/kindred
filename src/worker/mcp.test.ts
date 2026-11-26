@@ -67,7 +67,7 @@ function makeEnv() {
     DB: createMemD1(),
     ASSETS: {
       async fetch() {
-        return new Response('<html>fallback</html>', {
+        return new Response('<!doctype html><html><body><div id="root"></div></body></html>', {
           status: 200,
           headers: { 'Content-Type': 'text/html; charset=utf-8' },
         })
@@ -321,15 +321,75 @@ describe('Streamable HTTP MCP, CORS, and route boundary compliance', () => {
     assert.equal(errPayload.result?.isError, true)
   })
 
-  test('GET /skill.md returns markdown while malformed /skill.md, /api/none, and /mcp/extra return 404 instead of SPA HTML', async () => {
+  test('GET /skill.md and /llms.txt return markdown while malformed /skill.md, /api/none, and /mcp/extra return 404 instead of SPA HTML', async () => {
     const env = makeEnv()
-    const ok = await app.request('https://kindred.example.test/skill.md', { method: 'GET' }, env)
-    assert.equal(ok.status, 200)
-    assert.match(ok.headers.get('Content-Type') ?? '', /text\/markdown/)
+    for (const path of ['/skill.md', '/llms.txt']) {
+      const ok = await app.request(`https://kindred.example.test${path}`, { method: 'GET' }, env)
+      assert.equal(ok.status, 200)
+      assert.match(ok.headers.get('Content-Type') ?? '', /text\/markdown/)
+      assert.match(ok.headers.get('Link') ?? '', /rel="alternate"/)
+      const text = await ok.text()
+      assert.ok(text.includes('https://kindred.example.test/mcp'))
+      assert.ok(text.includes('Direct Entry:'))
+    }
 
     for (const badPath of ['/skill.md%EF%BC%8C%E7%84%B6%E5%90%8E', '/api', '/api/none', '/mcp/extra']) {
       const res = await app.request(`https://kindred.example.test${badPath}`, { method: 'GET' }, env)
       assert.equal(res.status, 404, `Expected 404 on ${badPath}, got ${res.status}`)
     }
+  })
+
+  test('bare homepage URL / delivers full Kindred protocol directly to AI fetchers and semantic non-JS HTML fallback to browser-UA readers', async () => {
+    const env = makeEnv()
+
+    const agentHeaderCases: Array<Record<string, string>> = [
+      { Accept: 'text/markdown' },
+      { Accept: 'text/markdown, text/html;q=0.9' },
+      { Accept: 'text/plain' },
+      { Accept: '*/*', 'User-Agent': 'curl/8.7.1' },
+      { Accept: 'text/html,application/xhtml+xml,*/*', 'User-Agent': 'Claude-User/1.0' },
+      { Accept: 'text/html,*/*', 'User-Agent': 'ChatGPT-User/1.0' },
+      { Accept: 'text/html,*/*', 'User-Agent': 'Perplexity-User/1.0' },
+    ]
+    for (const headers of agentHeaderCases) {
+      const res = await app.request('https://kindred.example.test/', { method: 'GET', headers }, env)
+      assert.equal(res.status, 200)
+      assert.match(res.headers.get('Content-Type') ?? '', /text\/markdown/)
+      assert.match(res.headers.get('Vary') ?? '', /Accept/)
+      assert.match(res.headers.get('Link') ?? '', /\/skill\.md/)
+      const body = await res.text()
+      assert.ok(body.includes('kindred_publish_quiz'))
+      assert.ok(body.includes('https://kindred.example.test/mcp'))
+    }
+
+    const browserHtmlRes = await app.request(
+      'https://kindred.example.test/',
+      {
+        method: 'GET',
+        headers: {
+          Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36',
+          'Sec-Fetch-Dest': 'document',
+          'Sec-Fetch-Mode': 'navigate',
+        },
+      },
+      env,
+    )
+    assert.equal(browserHtmlRes.status, 200)
+    assert.match(browserHtmlRes.headers.get('Content-Type') ?? '', /text\/html/)
+    assert.match(browserHtmlRes.headers.get('Link') ?? '', /\/skill\.md/)
+    const html = await browserHtmlRes.text()
+    assert.ok(html.includes('class="agent-ssr-skill"'))
+    assert.ok(html.includes('kindred_publish_quiz'))
+    assert.ok(html.includes('https://kindred.example.test/mcp'))
+
+    const headRes = await app.request(
+      'https://kindred.example.test/',
+      { method: 'HEAD', headers: { Accept: 'text/markdown' } },
+      env,
+    )
+    assert.equal(headRes.status, 200)
+    assert.match(headRes.headers.get('Content-Type') ?? '', /text\/markdown/)
+    assert.equal(await headRes.text(), '')
   })
 })
