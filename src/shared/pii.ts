@@ -144,7 +144,7 @@ const WRAP = '[^A-Za-z0-9\\u4e00-\\u9fff.。!！?？;；\\n]{0,12}'
 const NO_ENUM_WRAP = '[^A-Za-z0-9\\u4e00-\\u9fff.。!！?？;；\\n、]{0,12}'
 const EXPLICIT_DELIM = '[^\\sA-Za-z0-9\\u4e00-\\u9fff.。!！?？;；\\n、]'
 const NON_VERB_HANDLE =
-  "(?<!\\b(?:can['’]?t|cannot|couldn['’]?t|won['’]?t|wouldn['’]?t|don['’]?t|doesn['’]?t|didn['’]?t|shouldn['’]?t|can|could|will|would|should|must|might|may|to|i|you|we|they|do|does|did|never|always|usually|barely|really|still|even|actually|just|not|easily|calmly|best|poorly)[ \\t]+)\\bhandle"
+  "(?<!\\b(?:can['’]?t|cannot|couldn['’]?t|won['’]?t|wouldn['’]?t|don['’]?t|doesn['’]?t|didn['’]?t|shouldn['’]?t|can|could|will|would|should|must|might|may|i|you|we|they|do|does|did|never|always|usually|barely|really|still|even|actually|just|not|easily|calmly|poorly)[ \\t]+)(?<!(?:^|[^A-Za-z0-9-])to[ \\t]+)(?<!\\b(?:do|does|did|can|could|will|would|should|must|might|may)[ \\t]+(?:(?:my|your|his|her|their|our|the|this|that|a|an)[ \\t]+)?(?!(?:my|your|his|her|their|our|the|this|that|a|an|social|online|gaming|main|bio|fav|usual|new|old|real|backup|add|find|use|share|send|give|drop|try|search|check|ping|reach|dm|message|follow|contact|see|get|save|keep|know|copy|grab|have|got|by)\\b)[A-Za-z'’]+[ \\t]+)\\bhandle"
 
 const DIRECT_PATTERNS: ReadonlyArray<{ category: PiiFinding['category']; pattern: RegExp }> = [
   { category: 'email', pattern: /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi },
@@ -326,15 +326,12 @@ const PURE_ALPHA_EXPLICIT_CUES: readonly RegExp[] = [
     `\\b(?:find|add|dm|message|reach|contact|follow|text)\\s+me\\s+on\\s+(?:${EN_ALL_PLATS}|[vVxX])\\s*(?:as\\b|[:：=])\\s*${WRAP}$`,
     'i',
   ),
+  new RegExp(
+    `(?<![A-Za-z])${EN_DM_PLATS}\\s*(?:(?:账|帐)?号(?:码)?|用户名)\\s*(?:是|为|叫|[:：=])\\s*${WRAP}$`,
+    'i',
+  ),
   new RegExp(`(?:\\busername|${NON_VERB_HANDLE})\\s*[:：=]\\s*${WRAP}$`, 'i'),
 ]
-
-const PURE_ALPHA_EN_DM_CN_LABEL_CUE_RE = new RegExp(
-  `(?<![A-Za-z])${EN_DM_PLATS}\\s*(?:(?:账|帐)?号(?:码)?|用户名)\\s*(?:是|为|叫|[:：=])\\s*${WRAP}$`,
-  'i',
-)
-const CN_ACCOUNT_DESCRIPTOR_AFTER_RE =
-  /^[ \t]*(?:(?:账|帐)号|状态|风格|模式|类型|形式|路线|风(?![A-Za-z])|的(?:吗|呢|呀|吧|嘛|？|\?|$)|了(?:吗|呢|吧|？|\?|$))/
 
 const PURE_DIGIT_EXPLICIT_CUE_RE = new RegExp(
   `(?:${CN_DM_PLATS}|${CN_CONTENT_PLATS}|\\b${EN_ALL_PLATS})\\s*(?:(?:账|帐)?号(?:码)?|ID)\\s*(?:是|为|叫)?\\s*${WRAP}$`,
@@ -345,9 +342,14 @@ const PURE_ALPHA_OR_HYPHEN_RE = /^[A-Za-z](?:[A-Za-z-]{4,30}[A-Za-z])$/
 
 const EMPHASIS_RE = /(?<![A-Za-z0-9_])(_{1,3})(?=[^\s_])([^_\n]*?[^\s_])\1(?![A-Za-z0-9_])/g
 const PLATFORM_COLON_IN_EMPHASIS_RE = new RegExp(
-  `(?:\\b(?:${EN_ALL_PLATS}|[vVxX])|${CN_DM_PLATS}|${CN_CONTENT_PLATS})\\s*[:：=]`,
+  `(?:(?:\\b(?:${EN_ALL_PLATS}|[vVxX])|${CN_DM_PLATS}|${CN_CONTENT_PLATS})(?:\\s*(?:(?:账|帐)?号(?:码)?|用户名|id|handle|username|account|name))?|\\b(?:handle|username))\\s*[:：=]`,
   'i',
 )
+const DM_CUE_BEFORE_EMPHASIS_RE = new RegExp(
+  `(?:\\b(?:${EN_DM_PLATS}|[vVxX])|${CN_DM_PLATS})\\s*(?:(?:账|帐)?号(?:码)?|用户名|id|handle|username)?\\s*[:：=]\\s*$`,
+  'i',
+)
+const LOWER_SLASH_PAIR_RE = /^[a-z][a-z0-9.-]{2,31}\s*\/\s*[a-z][a-z0-9.-]{2,31}$/
 
 function hasCueBefore(before: string, patterns: readonly RegExp[]): boolean {
   return patterns.some((re) => re.test(before))
@@ -361,9 +363,13 @@ export function scanPii(text: string): { clean: boolean; findings: PiiFinding[] 
   const findings: PiiFinding[] = []
 
   for (const rawLine of normalized.split('\n')) {
-    const line = rawLine.replace(EMPHASIS_RE, (full, _delim, inner: string) =>
-      PLATFORM_COLON_IN_EMPHASIS_RE.test(inner) ? full : inner,
-    )
+    const line = rawLine.replace(EMPHASIS_RE, (full, _delim, inner: string, offset: number) => {
+      if (PLATFORM_COLON_IN_EMPHASIS_RE.test(inner)) return full
+      if (LOWER_SLASH_PAIR_RE.test(inner) && DM_CUE_BEFORE_EMPHASIS_RE.test(rawLine.slice(0, offset))) {
+        return full
+      }
+      return inner
+    })
     if (!line) continue
 
     for (const { category, pattern } of DIRECT_PATTERNS) {
@@ -423,11 +429,7 @@ export function scanPii(text: string): { clean: boolean; findings: PiiFinding[] 
         !PLATFORM_WORD_RE.test(tok) &&
         !NON_HANDLE_PURE_ALPHA_WORDS.has(tok.toLowerCase())
       ) {
-        if (
-          hasCueBefore(before, PURE_ALPHA_EXPLICIT_CUES) ||
-          (PURE_ALPHA_EN_DM_CN_LABEL_CUE_RE.test(before) &&
-            !CN_ACCOUNT_DESCRIPTOR_AFTER_RE.test(after))
-        ) {
+        if (hasCueBefore(before, PURE_ALPHA_EXPLICIT_CUES)) {
           findings.push({ category: 'social_handle', excerpt: tok.slice(0, 32) })
         }
       } else if (/^[1-9]\d{5,11}$/.test(tok)) {

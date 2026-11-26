@@ -1375,6 +1375,17 @@ html[lang='en'] .closing h2 {
     font-size: 0.67rem;
     padding: 4px 9px;
     gap: 6px;
+    text-wrap: balance;
+  }
+
+  .subtext-card {
+    padding: 12px;
+  }
+
+  .subtext-opt {
+    padding: 8px 9px;
+    gap: 7px;
+    font-size: 0.8rem;
   }
 
   .host-reel-group {
