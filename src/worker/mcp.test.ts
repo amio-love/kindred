@@ -505,7 +505,12 @@ describe('Streamable HTTP MCP, CORS, and route boundary compliance', () => {
     assert.equal(wellKnownHead.status, 200)
     assert.equal(await wellKnownHead.text(), '')
 
-    for (const badPath of ['/skill.md%EF%BC%8C%E7%84%B6%E5%90%8E', '/api', '/api/none', '/mcp/extra']) {
+    const wranglerConfig = JSON.parse(
+      readFileSync(fileURLToPath(new URL('../../wrangler.jsonc', import.meta.url)), 'utf-8'),
+    ) as { assets?: { run_worker_first?: string[] } }
+    assert.ok(wranglerConfig.assets?.run_worker_first?.includes('/.well-known/*'))
+
+    for (const badPath of ['/skill.md%EF%BC%8C%E7%84%B6%E5%90%8E', '/.well-known/other', '/api', '/api/none', '/mcp/extra']) {
       const res = await app.request(`https://kindred.example.test${badPath}`, { method: 'GET' }, env)
       assert.equal(res.status, 404, `Expected 404 on ${badPath}, got ${res.status}`)
     }

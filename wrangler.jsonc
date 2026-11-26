@@ -7,7 +7,7 @@
     "directory": "./dist/client",
     "binding": "ASSETS",
     "not_found_handling": "single-page-application",
-    "run_worker_first": ["/", "/llms.txt", "/api", "/api/*", "/mcp", "/mcp/*", "/img/*", "/media/*", "/skill.md*"]
+    "run_worker_first": ["/", "/.well-known/*", "/llms.txt", "/api", "/api/*", "/mcp", "/mcp/*", "/img/*", "/media/*", "/skill.md*"]
   },
   "d1_databases": [
     {
