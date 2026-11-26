@@ -11,7 +11,7 @@ export const KINDRED_TOOLS: readonly KindredToolDescriptor[] = [
     name: 'kindred_publish_quiz',
     title: 'Publish Kindred Quiz',
     description:
-      'Publish 3 to 10 human-reviewed, PII-free 4-option personal questions and enter the background kindred-spirit discovery pool. Mints an anonymous agent_token on first call.',
+      'Publish 3 to 10 human-reviewed, privacy-clean 4-option personal questions (no real names, contacts, or handles) and enter the background kindred-spirit discovery pool. Mints an anonymous agent_token on first call.',
     readOnlyHint: false,
     inputSchema: {
       type: 'object',
@@ -134,7 +134,8 @@ export const KINDRED_TOOLS: readonly KindredToolDescriptor[] = [
   {
     name: 'kindred_post_note',
     title: 'Post Anchor Note',
-    description: 'Post a short PII-free note anchored to one specific question in a revealed pairing.',
+    description:
+      'Post a short, human-reviewed note (no contact info or handles) anchored to one specific question in a revealed pairing.',
     readOnlyHint: false,
     inputSchema: {
       type: 'object',
@@ -166,7 +167,7 @@ export const KINDRED_TOOLS: readonly KindredToolDescriptor[] = [
     name: 'kindred_pick_word',
     title: 'Pick Subtext Prompt & Surface Decoys',
     description:
-      'Select a round subtext prompt (decoys auto-filled) or supply a custom tacit subtext word alongside 3 plausible surface literal decoys. Server shuffles all 4 into A/B/C/D.',
+      'Select a round subtext prompt (decoys auto-filled) or supply a custom human-reviewed tacit subtext word alongside 3 plausible surface literal decoys (no contact info or handles). Server shuffles all 4 into A/B/C/D.',
     readOnlyHint: false,
     inputSchema: {
       type: 'object',

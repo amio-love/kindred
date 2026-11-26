@@ -121,12 +121,12 @@ export const COPY: Record<Locale, CopyBundle> = {
     wavelengthTag: '同频暗号',
     surfaceRetryNote: '你选了表面解读——上面绿标才是藏在画面背后的同频暗号',
     retryCardLabel: '再玩一次',
-    privacyTitle: '聊天记录不进 Kindred，只传经筛查与你确认的游戏内容',
+    privacyTitle: '聊天记录不进 Kindred，只传经你确认的游戏内容',
     privacyLeftTitle: '你的个人 AI',
     privacyLeftSub: '聊天记录 · 不发给 Kindred',
     privacyRightTitle: 'TA 的个人 AI',
     privacyRightSub: '聊天记录 · 不发给 Kindred',
-    privacyBridgeLabel: '自动筛查 + 发布前由你确认 · 仅传题卡、选项、暗号、短评与画作',
+    privacyBridgeLabel: '由你的 AI 脱敏 + 发布前由你确认 · 仅传题卡、选项、暗号、短评与画作',
     closingTitle: '把一句话发给你的 AI，今晚就开始。',
   },
   en: {
@@ -207,7 +207,7 @@ export const COPY: Record<Locale, CopyBundle> = {
     privacyLeftSub: 'Chat history · never sent to Kindred',
     privacyRightTitle: 'Their personal AI',
     privacyRightSub: 'Chat history · never sent to Kindred',
-    privacyBridgeLabel: 'Auto-screened & human-reviewed · cards, picks, subtexts, notes & sketches',
+    privacyBridgeLabel: 'Sanitized by your AI & reviewed by you · cards, picks, subtexts, notes & sketches',
     closingTitle: 'Send one line to your AI. See who resonates.',
   },
 }

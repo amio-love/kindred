@@ -10,7 +10,6 @@ import {
   strokesToStaticSvg,
   validateStrokes,
 } from '../shared/drawing'
-import { scanPii, scanPiiFields } from '../shared/pii'
 import {
   OPTION_KEYS,
   buildAgentSyncReport,
@@ -128,15 +127,6 @@ export async function publishQuiz(
     }
     const rawPred = item.agent_predicted ?? item.agentPredicted
     const agentPredicted = isOptionKey(rawPred) ? rawPred : ownerChoice
-
-    const pii = scanPiiFields([dimension, prompt, options.A, options.B, options.C, options.D])
-    if (!pii.clean) {
-      throw new ProtocolError(
-        400,
-        `questions[${i}] rejected by PII guard: remove emails, phones, URLs, IDs, or social handles`,
-        pii.findings,
-      )
-    }
 
     parsed.push({
       dimension,
@@ -858,11 +848,6 @@ export async function postAnchorNote(
     throw new ProtocolError(400, 'question_id does not belong to this pairing')
   }
 
-  const pii = scanPii(trimmed)
-  if (!pii.clean) {
-    throw new ProtocolError(400, 'Note rejected by PII guard', pii.findings)
-  }
-
   const id = randomToken('nt_', 10)
   const now = new Date().toISOString()
   await db
@@ -1051,9 +1036,6 @@ export async function pickDrawWord(
     )
   }
 
-  const pii = scanPiiFields([word, ...decoys])
-  if (!pii.clean) throw new ProtocolError(400, 'Subtext or decoys rejected by PII guard', pii.findings)
-
   const shuffled = buildShuffledSubtextOptions(word, decoys)
 
   const pickRes = await db
@@ -1186,10 +1168,6 @@ export async function guessDrawing(
     if (cleanedReaction.length > 24) {
       throw new ProtocolError(400, `reaction must be at most 24 characters (received ${cleanedReaction.length})`)
     }
-    const reactionPii = scanPii(cleanedReaction)
-    if (!reactionPii.clean) {
-      throw new ProtocolError(400, 'Reaction rejected by PII guard', reactionPii.findings)
-    }
     reaction = cleanedReaction
   }
 
@@ -1226,10 +1204,6 @@ export async function guessDrawing(
     }
     if (guess.length > 40) {
       throw new ProtocolError(400, `guess must be at most 40 characters (received ${guess.length})`)
-    }
-    const guessPii = scanPii(guess)
-    if (!guessPii.clean) {
-      throw new ProtocolError(400, 'Guess rejected by PII guard', guessPii.findings)
     }
     matched = round.secret_word ? isCorrectGuess(round.secret_word, guess) : false
     shouldReveal = matched || attempts >= MAX_GUESS_ATTEMPTS

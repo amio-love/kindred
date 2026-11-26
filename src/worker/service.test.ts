@@ -225,29 +225,11 @@ async function setupDrawGame(db: D1Database, lang: 'en' | 'zh' = 'en') {
 const VALID_STROKES = [{ color: '#17191f', width: 4, points: [[20, 20], [180, 180]] }]
 
 describe('Phase 1 quiz publishing, screening gates, and double-blind immutability', () => {
-  test('validates PII per field (including options), rejects invalid token/duplicates/overlong prompt, and rolls back atomically', async () => {
+  test('rejects invalid token, duplicate options, and overlong prompt, and rolls back atomically', async () => {
     let failInsert = false
     const db = createSqliteD1({ shouldFailSql: (sql) => failInsert && /INSERT INTO questions/i.test(sql) })
 
     await assert.rejects(() => publishQuiz(db, ORIGIN, 'knd_nonexistent_token', buildQuestions('bad')), /Invalid agent_token/i)
-
-    const piiPrompt = buildQuestions('pii', 'zh')
-    piiPrompt[0]!.prompt = '我的微信号是kindred_99，聊聊？'
-    await assert.rejects(() => publishQuiz(db, ORIGIN, null, piiPrompt), /PII/i)
-
-    const piiOption = buildQuestions('piiopt', 'en')
-    piiOption[0]!.options.B = 'my telegram is alice_99'
-    await assert.rejects(() => publishQuiz(db, ORIGIN, null, piiOption), /PII/i)
-
-    const piiDim = buildQuestions('piidim', 'en')
-    piiDim[0]!.dimension = '@kindred_99'
-    await assert.rejects(() => publishQuiz(db, ORIGIN, null, piiDim), /PII/i)
-
-    for (const key of ['A', 'B', 'C', 'D'] as const) {
-      const piiOpt = buildQuestions(`piiopt-${key}`, 'en')
-      piiOpt[0]!.options[key] = 'find me on X: alice_99'
-      await assert.rejects(() => publishQuiz(db, ORIGIN, null, piiOpt), /PII/i)
-    }
 
     const dupOptQuiz = buildQuestions('dup')
     dupOptQuiz[0]!.options.B = dupOptQuiz[0]!.options.A
@@ -832,7 +814,7 @@ describe('Phase 1 quiz publishing, screening gates, and double-blind immutabilit
 })
 
 describe('Subtext Draw protocol invariants', () => {
-  test('rejects duplicate subtext/decoy strings, overlong words, and PII across subtext, decoys, and notes', async () => {
+  test('rejects duplicate subtext/decoy strings, overlong words, and overlong notes', async () => {
     const db = createSqliteD1()
     const { tokenA, pairingId, questionId, gameId, roundId } = await setupDrawGame(db)
 
@@ -861,28 +843,8 @@ describe('Subtext Draw protocol invariants', () => {
     )
 
     await assert.rejects(
-      () =>
-        pickDrawWord(db, ORIGIN, tokenA, gameId, roundId, '加微信号:kindred_99', [
-          'Late office hour',
-          'Tired eyes',
-          'Forgot keys',
-        ]),
-      /PII/i,
-    )
-
-    await assert.rejects(
-      () =>
-        pickDrawWord(db, ORIGIN, tokenA, gameId, roundId, 'Quiet evening commute', [
-          'find me @kindred_99',
-          'Tired eyes',
-          'Forgot keys',
-        ]),
-      /PII/i,
-    )
-
-    await assert.rejects(
-      () => postAnchorNote(db, tokenA, pairingId, questionId, '加微信号:kindred_99 聊聊'),
-      /PII/i,
+      () => postAnchorNote(db, tokenA, pairingId, questionId, 'a'.repeat(241)),
+      /at most 240 characters/i,
     )
   })
 
@@ -926,8 +888,8 @@ describe('Subtext Draw protocol invariants', () => {
       /Only the guesser/i,
     )
     await assert.rejects(
-      () => guessDrawing(db, ORIGIN, tokenB, gameId, roundId, '', false, 'a@b.co', correctKey),
-      /PII/i,
+      () => guessDrawing(db, ORIGIN, tokenB, gameId, roundId, '', false, 'a'.repeat(25), correctKey),
+      /at most 24 characters/i,
     )
 
     const wrongReveal = await guessDrawing(db, ORIGIN, tokenB, gameId, roundId, '', false, '猜偏了', wrongKey)
@@ -945,7 +907,7 @@ describe('Subtext Draw protocol invariants', () => {
     const round2Id = wrongReveal.next_round!.id
     await pickDrawWord(db, ORIGIN, tokenB, gameId, round2Id, '湘北平交道的那个夏天')
     await submitDrawing(db, ORIGIN, tokenB, gameId, round2Id, VALID_STROKES)
-    const skipped = await guessDrawing(db, ORIGIN, tokenA, gameId, round2Id, '加微信号:kindred_99', true)
+    const skipped = await guessDrawing(db, ORIGIN, tokenA, gameId, round2Id, '跳过', true)
     assert.equal(skipped.matched, false)
     assert.equal(skipped.revealed, true)
     const storedR2 = await db
@@ -1185,7 +1147,7 @@ describe('Subtext Draw protocol invariants', () => {
     assert.equal(recovered.rounds.length, 1)
   })
 
-  test('auto-upgrades legacy rounds, atomically counts concurrent legacy guesses, and guards PII/length/give_up', async () => {
+  test('auto-upgrades legacy rounds, atomically counts concurrent legacy guesses, and guards length and give_up', async () => {
     const legacyBarrier = createBarrier(3)
     let interleaveLegacy = false
     const db = createSqliteD1({
@@ -1220,10 +1182,6 @@ describe('Subtext Draw protocol invariants', () => {
     const guesserInbox = await getInbox(db, ORIGIN, tokenB)
     assert.equal(guesserInbox.active_draw_turns[0]?.round.guessMode, 'legacy_free_text')
 
-    await assert.rejects(
-      () => guessDrawing(db, ORIGIN, tokenB, gameId, roundId, '联系 alice@example.com', false),
-      /PII/i,
-    )
     await assert.rejects(
       () => guessDrawing(db, ORIGIN, tokenB, gameId, roundId, 'a'.repeat(41), false),
       /at most 40 characters/i,
