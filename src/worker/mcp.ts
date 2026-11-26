@@ -7,6 +7,7 @@ import {
   eraseAgent,
   getInbox,
   getPairingReveal,
+  getQuizSeeds,
   guessDrawing,
   pickDrawWord,
   postAnchorNote,
@@ -47,6 +48,11 @@ async function dispatchToolCall(
       : headerToken
 
   switch (name) {
+    case 'kindred_quiz_seeds':
+      return getQuizSeeds({
+        locale: args.locale === 'zh' || args.locale === 'en' ? args.locale : undefined,
+        count: typeof args.count === 'number' ? args.count : undefined,
+      })
     case 'kindred_publish_quiz':
       return publishQuiz(db, origin, token, args.questions)
     case 'kindred_inbox':
@@ -139,7 +145,7 @@ async function handleRpcItem(
         },
         serverInfo: {
           name: 'kindred',
-          version: '2.0.0',
+          version: '2.2.0',
         },
       }),
     }

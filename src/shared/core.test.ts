@@ -17,6 +17,7 @@ import {
   passesSingleDirectionGate,
   shuffleQuestionOptions,
 } from './quiz'
+import { QUIZ_SCENARIO_SEEDS, sampleQuizSeeds } from './quizSeeds'
 import type { StoredQuestion } from './types'
 
 describe('Option shuffling and paired matching gate', () => {
@@ -249,5 +250,19 @@ describe('Static SVG drawing compiler and guess matching', () => {
     assert.equal(isCorrectGuess('灌篮高手：电车开过去，湘北的夏天就结束了', '  灌篮高手：电车开过去，湘北的夏天就结束了！ '), true)
     assert.equal(isCorrectGuess('舍不得今天结束，宁愿把深夜浪费在空白里', '舍不得今天结束，宁愿把深夜浪费在空白里'), true)
     assert.equal(isCorrectGuess('灌篮高手：电车开过去，湘北的夏天就结束了', '夏天'), false)
+  })
+})
+
+describe('Rotating scenario seed pool', () => {
+  test('samples distinct lenses with complete bilingual fields across the pool', () => {
+    const lenses = new Set(QUIZ_SCENARIO_SEEDS.map((s) => s.lens))
+    assert.equal(lenses.size, 8)
+    for (const seed of QUIZ_SCENARIO_SEEDS) {
+      assert.ok(seed.lens.trim().length > 0 && seed.lensZh.trim().length > 0)
+      assert.ok(seed.angleEn.trim().length > 10 && seed.angleZh.trim().length > 6)
+    }
+    const sampled = sampleQuizSeeds(8, () => 0.42)
+    assert.equal(sampled.length, 8)
+    assert.equal(new Set(sampled.map((s) => s.lens)).size, 8)
   })
 })

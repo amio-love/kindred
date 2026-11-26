@@ -17,6 +17,8 @@ export interface AgentRow {
   id: string
   token_hash: string
   quiz_ready: number
+  current_quiz_version: number
+  skill_version: number
   created_at: string
   last_seen_at: string
 }
@@ -25,6 +27,8 @@ export interface PairingRow {
   id: string
   agent_a_id: string
   agent_b_id: string
+  agent_a_quiz_version: number
+  agent_b_quiz_version: number
   status: PairingStatus
   agent_a_submitted_at: string | null
   agent_b_submitted_at: string | null
@@ -83,21 +87,36 @@ export async function getAgentByToken(db: D1Database, rawToken: string | null | 
   return row ?? null
 }
 
-export async function listQuestions(db: D1Database, agentId: string): Promise<StoredQuestion[]> {
-  const { results } = await db
-    .prepare('SELECT * FROM questions WHERE agent_id = ? ORDER BY position ASC')
-    .bind(agentId)
-    .all<{
-      id: string
-      position: number
-      dimension: string
-      prompt: string
-      options_json: string
-      owner_choice: OptionKey
-      agent_predicted: OptionKey
-      confidence: ConfidenceLevel
-      starred: number
-    }>()
+export async function listQuestions(
+  db: D1Database,
+  agentId: string,
+  quizVersion?: number,
+): Promise<StoredQuestion[]> {
+  const stmt =
+    quizVersion !== undefined
+      ? db
+          .prepare('SELECT * FROM questions WHERE agent_id = ? AND quiz_version = ? ORDER BY position ASC')
+          .bind(agentId, quizVersion)
+      : db
+          .prepare(
+            `SELECT q.* FROM questions q
+             JOIN agents a ON a.id = q.agent_id
+             WHERE q.agent_id = ? AND q.quiz_version = a.current_quiz_version
+             ORDER BY q.position ASC`,
+          )
+          .bind(agentId)
+
+  const { results } = await stmt.all<{
+    id: string
+    position: number
+    dimension: string
+    prompt: string
+    options_json: string
+    owner_choice: OptionKey
+    agent_predicted: OptionKey
+    confidence: ConfidenceLevel
+    starred: number
+  }>()
 
   return (results ?? []).map((row) => ({
     id: row.id,
@@ -215,9 +234,19 @@ export async function ensurePoolPairingsForAgent(
     const pairingId = randomToken('pr_', 12)
     const insertRes = await db
       .prepare(
-        `INSERT OR IGNORE INTO pairings (id, agent_a_id, agent_b_id, status, created_at)
-         SELECT ?, ?, ?, 'pending_agents', ?
+        `INSERT OR IGNORE INTO pairings (
+           id, agent_a_id, agent_b_id, agent_a_quiz_version, agent_b_quiz_version, status, created_at
+         )
+         SELECT
+           ?,
+           ?,
+           ?,
+           (SELECT current_quiz_version FROM agents WHERE id = ?),
+           (SELECT current_quiz_version FROM agents WHERE id = ?),
+           'pending_agents',
+           ?
          WHERE EXISTS (SELECT 1 FROM agents WHERE id = ? AND quiz_ready = 1)
+           AND EXISTS (SELECT 1 FROM agents WHERE id = ? AND quiz_ready = 1)
            AND (
              SELECT COUNT(*) FROM pairings
              WHERE (agent_a_id = ? OR agent_b_id = ?) AND created_at >= ?
@@ -231,7 +260,10 @@ export async function ensurePoolPairingsForAgent(
         pairingId,
         aId,
         bId,
+        aId,
+        bId,
         now,
+        agentId,
         cand.id,
         agentId,
         agentId,

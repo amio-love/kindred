@@ -11,6 +11,7 @@ import {
   validateStrokes,
 } from '../shared/drawing'
 import {
+  MATCH_GATE,
   OPTION_KEYS,
   buildAgentSyncReport,
   evaluateDirection,
@@ -20,6 +21,8 @@ import {
   passesSingleDirectionGate,
   shuffleQuestionOptions,
 } from '../shared/quiz'
+import { sampleQuizSeeds } from '../shared/quizSeeds'
+import { CURRENT_SKILL_VERSION } from '../shared/skillTemplate'
 import type { AnswerEntry, ConfidenceLevel, OptionKey, PairingStatus, QuestionOptions } from '../shared/types'
 import {
   ensurePoolPairingsForAgent,
@@ -62,6 +65,32 @@ async function inferAgentLocale(db: D1Database, agentId: string): Promise<'zh' |
   const qs = await listQuestions(db, agentId)
   if (qs.length === 0) return 'zh'
   return detectLocaleFromTexts(qs.map((q) => `${q.dimension} ${q.prompt}`))
+}
+
+export function getQuizSeeds(options?: { locale?: 'zh' | 'en'; count?: number }) {
+  const count = Math.min(8, Math.max(1, Math.round(options?.count ?? 8)))
+  const locale = options?.locale
+  const picked = sampleQuizSeeds(count)
+  const seeds = picked.map((seed) => {
+    if (locale === 'zh') {
+      return { lens: seed.lensZh, angle: seed.angleZh }
+    }
+    if (locale === 'en') {
+      return { lens: seed.lens, angle: seed.angleEn }
+    }
+    return {
+      lens: seed.lens,
+      lens_zh: seed.lensZh,
+      angle: seed.angleEn,
+      angle_zh: seed.angleZh,
+    }
+  })
+  return {
+    current_skill_version: CURRENT_SKILL_VERSION,
+    locale: locale ?? 'bilingual',
+    count: seeds.length,
+    seeds,
+  }
 }
 
 export async function publishQuiz(
@@ -149,12 +178,11 @@ export async function publishQuiz(
   let mintedToken: string | null = null
   const now = new Date().toISOString()
   const batchStatements: D1PreparedStatement[] = []
-  let replaceGuardIdx: number | null = null
-  const noBlockingPairingSql = `NOT EXISTS (
-    SELECT 1 FROM pairings
-    WHERE (agent_a_id = ? OR agent_b_id = ?)
-      AND status IN ('pending_agents', 'ready_for_humans', 'revealed')
-  )`
+  let upgradeGuardIdx: number | null = null
+  let refreshPendingAIdx: number | null = null
+  let refreshPendingBIdx: number | null = null
+  let quizVersion = 1
+  const upgraded = Boolean(agent)
 
   if (!agent) {
     const id = randomToken('agt_', 12)
@@ -162,34 +190,33 @@ export async function publishQuiz(
     const tokenHash = await sha256Hex(mintedToken)
     batchStatements.push(
       db
-        .prepare('INSERT INTO agents (id, token_hash, quiz_ready, created_at, last_seen_at) VALUES (?, ?, 1, ?, ?)')
-        .bind(id, tokenHash, now, now),
+        .prepare(
+          `INSERT INTO agents (id, token_hash, quiz_ready, current_quiz_version, skill_version, created_at, last_seen_at)
+           VALUES (?, ?, 1, 1, ?, ?, ?)`,
+        )
+        .bind(id, tokenHash, CURRENT_SKILL_VERSION, now, now),
     )
-    agent = { id, token_hash: tokenHash, quiz_ready: 1, created_at: now, last_seen_at: now }
-  } else {
-    const blockingPairing = await db
-      .prepare(
-        `SELECT id FROM pairings
-         WHERE (agent_a_id = ? OR agent_b_id = ?)
-           AND status IN ('pending_agents', 'ready_for_humans', 'revealed')
-         LIMIT 1`,
-      )
-      .bind(agent.id, agent.id)
-      .first<{ id: string }>()
-    if (blockingPairing) {
-      throw new ProtocolError(
-        409,
-        'Cannot replace quiz while active or revealed pairings exist; call kindred_erase to start fresh',
-      )
+    agent = {
+      id,
+      token_hash: tokenHash,
+      quiz_ready: 1,
+      current_quiz_version: 1,
+      skill_version: CURRENT_SKILL_VERSION,
+      created_at: now,
+      last_seen_at: now,
     }
-    replaceGuardIdx = batchStatements.length
+  } else {
+    const previousVersion = Number(agent.current_quiz_version ?? 1)
+    quizVersion = previousVersion + 1
+    upgradeGuardIdx = batchStatements.length
     batchStatements.push(
       db
-        .prepare(`UPDATE agents SET quiz_ready = 1, last_seen_at = ? WHERE id = ? AND ${noBlockingPairingSql}`)
-        .bind(now, agent.id, agent.id, agent.id),
-      db
-        .prepare(`DELETE FROM questions WHERE agent_id = ? AND ${noBlockingPairingSql}`)
-        .bind(agent.id, agent.id, agent.id),
+        .prepare(
+          `UPDATE agents
+           SET current_quiz_version = ?, skill_version = ?, quiz_ready = 1, last_seen_at = ?
+           WHERE id = ? AND current_quiz_version = ?`,
+        )
+        .bind(quizVersion, CURRENT_SKILL_VERSION, now, agent.id, previousVersion),
     )
   }
 
@@ -199,20 +226,23 @@ export async function publishQuiz(
     const shuffled = shuffleQuestionOptions(q.options, q.ownerChoice, q.agentPredicted)
     const qId = randomToken('q_', 10)
     questionIds.push(qId)
-    if (replaceGuardIdx !== null) {
+    if (upgradeGuardIdx !== null) {
       batchStatements.push(
         db
           .prepare(
             `INSERT INTO questions (
-               id, agent_id, position, dimension, prompt, options_json,
+               id, agent_id, quiz_version, position, dimension, prompt, options_json,
                owner_choice, agent_predicted, confidence, starred, created_at
              )
-             SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-             WHERE ${noBlockingPairingSql}`,
+             SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+             WHERE EXISTS (
+               SELECT 1 FROM agents WHERE id = ? AND current_quiz_version = ?
+             )`,
           )
           .bind(
             qId,
             agent.id,
+            quizVersion,
             i + 1,
             q.dimension,
             q.prompt,
@@ -223,7 +253,7 @@ export async function publishQuiz(
             q.starred ? 1 : 0,
             now,
             agent.id,
-            agent.id,
+            quizVersion,
           ),
       )
     } else {
@@ -231,13 +261,14 @@ export async function publishQuiz(
         db
           .prepare(
             `INSERT INTO questions (
-               id, agent_id, position, dimension, prompt, options_json,
+               id, agent_id, quiz_version, position, dimension, prompt, options_json,
                owner_choice, agent_predicted, confidence, starred, created_at
-             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           )
           .bind(
             qId,
             agent.id,
+            quizVersion,
             i + 1,
             q.dimension,
             q.prompt,
@@ -252,13 +283,50 @@ export async function publishQuiz(
     }
   }
 
-  const batchResults = await db.batch(batchStatements)
-  if (replaceGuardIdx !== null && Number(batchResults[replaceGuardIdx]?.meta?.changes ?? 0) === 0) {
-    throw new ProtocolError(
-      409,
-      'Cannot replace quiz while active or revealed pairings exist; call kindred_erase to start fresh',
+  if (upgradeGuardIdx !== null) {
+    refreshPendingAIdx = batchStatements.length
+    batchStatements.push(
+      db
+        .prepare(
+          `UPDATE pairings
+           SET agent_a_quiz_version = ?
+           WHERE status = 'pending_agents'
+             AND agent_a_id = ?
+             AND agent_b_submitted_at IS NULL
+             AND EXISTS (SELECT 1 FROM agents WHERE id = ? AND current_quiz_version = ?)`,
+        )
+        .bind(quizVersion, agent.id, agent.id, quizVersion),
+    )
+    refreshPendingBIdx = batchStatements.length
+    batchStatements.push(
+      db
+        .prepare(
+          `UPDATE pairings
+           SET agent_b_quiz_version = ?
+           WHERE status = 'pending_agents'
+             AND agent_b_id = ?
+             AND agent_a_submitted_at IS NULL
+             AND EXISTS (SELECT 1 FROM agents WHERE id = ? AND current_quiz_version = ?)`,
+        )
+        .bind(quizVersion, agent.id, agent.id, quizVersion),
     )
   }
+
+  let batchResults: D1Result[]
+  try {
+    batchResults = await db.batch(batchStatements)
+  } catch (err) {
+    if (upgradeGuardIdx !== null && /UNIQUE constraint failed/i.test(err instanceof Error ? err.message : String(err))) {
+      throw new ProtocolError(409, 'Quiz was concurrently updated; retry publishing with your latest state')
+    }
+    throw err
+  }
+  if (upgradeGuardIdx !== null && Number(batchResults[upgradeGuardIdx]?.meta?.changes ?? 0) === 0) {
+    throw new ProtocolError(409, 'Quiz was concurrently updated; retry publishing with your latest state')
+  }
+  const pendingPairingsRefreshed =
+    (refreshPendingAIdx !== null ? Number(batchResults[refreshPendingAIdx]?.meta?.changes ?? 0) : 0) +
+    (refreshPendingBIdx !== null ? Number(batchResults[refreshPendingBIdx]?.meta?.changes ?? 0) : 0)
 
   const newPairings = await ensurePoolPairingsForAgent(db, agent.id, { maxNew: 1, dailyLimit: 3 })
   const base = origin.replace(/\/+$/, '')
@@ -289,8 +357,10 @@ export async function publishQuiz(
     .first<PairingRow>()
 
   if (firstPending) {
-    const partnerId = firstPending.agent_a_id === agent.id ? firstPending.agent_b_id : firstPending.agent_a_id
-    const partnerQs = await listQuestions(db, partnerId)
+    const isA = firstPending.agent_a_id === agent.id
+    const partnerId = isA ? firstPending.agent_b_id : firstPending.agent_a_id
+    const partnerQuizVersion = isA ? firstPending.agent_b_quiz_version : firstPending.agent_a_quiz_version
+    const partnerQs = await listQuestions(db, partnerId, partnerQuizVersion)
     if (partnerQs.length > 0) {
       initialQuiz = {
         pairing_id: firstPending.id,
@@ -310,21 +380,27 @@ export async function publishQuiz(
     agent_id: agent.id,
     agent_token: mintedToken ?? undefined,
     mcp_url: `${base}/mcp?token=${effectiveToken}`,
+    quiz_version: quizVersion,
+    upgraded,
+    skill_version: CURRENT_SKILL_VERSION,
+    pending_pairings_refreshed: pendingPairingsRefreshed,
     published_count: questionIds.length,
     shuffled: true,
     new_pairings_created: newPairings,
     initial_quiz: initialQuiz,
     next_step: initialQuiz
-      ? 'Immediately answer initial_quiz via kindred_answer_quiz (use U when you lack real memory), show your human the server-returned score right away, and then ask whether they want you to search automatically in the background (1, 2, or 3 times/day).'
-      : 'Your quiz is live in the discovery pool. No other agent quizzes are waiting right now; ask your human whether they want you to check kindred_inbox automatically in the background (1, 2, or 3 times/day).',
+      ? 'Silently answer initial_quiz via kindred_answer_quiz without printing the partner’s questions or your guesses in chat (use U when genuinely unsure), show your human only the server-returned score right away, and then ask whether they want automatic background searches (1, 2, or 3 times/day).'
+      : upgraded
+        ? 'Your upgraded quiz is now live without touching past pairings. Keep checking kindred_inbox on your human’s chosen schedule.'
+        : 'Your quiz is live in the discovery pool. No other agent quizzes are waiting right now; ask your human whether they want you to check kindred_inbox automatically in the background (1, 2, or 3 times/day).',
   }
 }
 
 async function reconcilePairingStatus(db: D1Database, pairing: PairingRow): Promise<PairingRow> {
   if (pairing.status === 'pending_agents' && (pairing.agent_a_submitted_at || pairing.agent_b_submitted_at)) {
     const [qsA, qsB, ansA, ansB] = await Promise.all([
-      pairing.agent_b_submitted_at ? listQuestions(db, pairing.agent_a_id) : Promise.resolve([]),
-      pairing.agent_a_submitted_at ? listQuestions(db, pairing.agent_b_id) : Promise.resolve([]),
+      pairing.agent_b_submitted_at ? listQuestions(db, pairing.agent_a_id, pairing.agent_a_quiz_version) : Promise.resolve([]),
+      pairing.agent_a_submitted_at ? listQuestions(db, pairing.agent_b_id, pairing.agent_b_quiz_version) : Promise.resolve([]),
       pairing.agent_a_submitted_at ? listAnswers(db, pairing.id, pairing.agent_a_id, 'agent') : Promise.resolve([]),
       pairing.agent_b_submitted_at ? listAnswers(db, pairing.id, pairing.agent_b_id, 'agent') : Promise.resolve([]),
     ])
@@ -458,12 +534,14 @@ export async function getInbox(
   for (const p of pairingRows ?? []) {
     const isA = p.agent_a_id === agent.id
     const partnerId = isA ? p.agent_b_id : p.agent_a_id
+    const selfQuizVersion = isA ? p.agent_a_quiz_version : p.agent_b_quiz_version
+    const partnerQuizVersion = isA ? p.agent_b_quiz_version : p.agent_a_quiz_version
     const agentSubmitted = isA ? Boolean(p.agent_a_submitted_at) : Boolean(p.agent_b_submitted_at)
     const humanSubmitted = isA ? Boolean(p.human_a_submitted_at) : Boolean(p.human_b_submitted_at)
     const partnerHumanSubmitted = isA ? Boolean(p.human_b_submitted_at) : Boolean(p.human_a_submitted_at)
 
     if (p.status === 'pending_agents' && !agentSubmitted && pendingQuizzes.length < 12) {
-      const partnerQs = await listQuestions(db, partnerId)
+      const partnerQs = await listQuestions(db, partnerId, partnerQuizVersion)
       if (partnerQs.length > 0) {
         pendingQuizzes.push({
           pairing_id: p.id,
@@ -478,7 +556,7 @@ export async function getInbox(
         })
       }
     } else if (p.status === 'ready_for_humans') {
-      const partnerQs = !humanSubmitted ? await listQuestions(db, partnerId) : []
+      const partnerQs = !humanSubmitted ? await listQuestions(db, partnerId, partnerQuizVersion) : []
       readyForHuman.push({
         pairing_id: p.id,
         self_submitted: humanSubmitted,
@@ -496,8 +574,8 @@ export async function getInbox(
       })
     } else if (p.status === 'revealed') {
       const [selfQs, partnerQs, selfHuman, selfAgent, partnerHuman, notes, drawGame] = await Promise.all([
-        listQuestions(db, agent.id),
-        listQuestions(db, partnerId),
+        listQuestions(db, agent.id, selfQuizVersion),
+        listQuestions(db, partnerId, partnerQuizVersion),
         listAnswers(db, p.id, agent.id, 'human'),
         listAnswers(db, p.id, agent.id, 'agent'),
         listAnswers(db, p.id, partnerId, 'human'),
@@ -544,8 +622,26 @@ export async function getInbox(
     round: formatDrawRoundView(row, agent.id, origin),
   }))
 
+  const base = origin.replace(/\/+$/, '')
+  const agentSkillVersion = Number(agent.skill_version ?? 1)
+  const protocolUpdate =
+    agentSkillVersion < CURRENT_SKILL_VERSION
+      ? {
+          current_skill_version: CURRENT_SKILL_VERSION,
+          your_quiz_skill_version: agentSkillVersion,
+          skill_url: `${base}/skill.md`,
+          summary:
+            'Kindred upgraded quiz craft & interactive alignment rules, and now supports non-destructive quiz upgrades that preserve all existing pairings.',
+          action:
+            'Re-read skill_url before drafting or refreshing questions, and offer your human a one-time optional quiz upgrade using your existing agent_token (do not repeat if they decline).',
+        }
+      : null
+
   return {
     agent_id: agent.id,
+    current_quiz_version: Number(agent.current_quiz_version ?? 1),
+    skill_version: agentSkillVersion,
+    protocol_update: protocolUpdate,
     pending_quizzes: pendingQuizzes,
     ready_for_human: readyForHuman,
     revealed_pairings: revealedPairings,
@@ -581,7 +677,10 @@ export async function submitAgentAnswers(
   }
 
   const partnerId = isA ? pairing.agent_b_id : pairing.agent_a_id
-  const partnerQs = await listQuestions(db, partnerId)
+  const selfQuizVersion = isA ? pairing.agent_a_quiz_version : pairing.agent_b_quiz_version
+  const partnerQuizVersion = isA ? pairing.agent_b_quiz_version : pairing.agent_a_quiz_version
+  const partnerVersionCol = isA ? 'agent_b_quiz_version' : 'agent_a_quiz_version'
+  const partnerQs = await listQuestions(db, partnerId, partnerQuizVersion)
   const validIds = new Set(partnerQs.map((q) => q.id))
 
   const seenIds = new Set<string>()
@@ -615,10 +714,10 @@ export async function submitAgentAnswers(
          SELECT ?, ?, 'agent', ?, ?, ?
          WHERE EXISTS (
            SELECT 1 FROM pairings
-           WHERE id = ? AND status = 'pending_agents' AND ${col} IS NULL
+           WHERE id = ? AND status = 'pending_agents' AND ${col} IS NULL AND ${partnerVersionCol} = ?
          )`,
       )
-      .bind(pairing.id, agent.id, qId, choice, now, pairing.id),
+      .bind(pairing.id, agent.id, qId, choice, now, pairing.id, partnerQuizVersion),
   )
   const dirSelf = evaluateDirection(
     partnerQs,
@@ -635,13 +734,13 @@ export async function submitAgentAnswers(
         .prepare(
           `UPDATE pairings
            SET ${col} = ?, status = 'ready_for_humans'
-           WHERE id = ? AND status = 'pending_agents' AND ${col} IS NULL`,
+           WHERE id = ? AND status = 'pending_agents' AND ${col} IS NULL AND ${partnerVersionCol} = ?`,
         )
-        .bind(now, pairing.id),
+        .bind(now, pairing.id, partnerQuizVersion),
     )
   } else if (partnerAlreadySubmitted) {
     const [selfQs, partnerAgentAnswers] = await Promise.all([
-      listQuestions(db, agent.id),
+      listQuestions(db, agent.id, selfQuizVersion),
       listAnswers(db, pairing.id, partnerId, 'agent'),
     ])
     const dirPartner = evaluateDirection(selfQs, partnerAgentAnswers)
@@ -651,21 +750,31 @@ export async function submitAgentAnswers(
         .prepare(
           `UPDATE pairings
            SET ${col} = ?, status = ?
-           WHERE id = ? AND status = 'pending_agents' AND ${col} IS NULL AND ${partnerCol} IS NOT NULL`,
+           WHERE id = ? AND status = 'pending_agents' AND ${col} IS NULL AND ${partnerCol} IS NOT NULL AND ${partnerVersionCol} = ?`,
         )
-        .bind(now, computedStatus, pairing.id),
+        .bind(now, computedStatus, pairing.id, partnerQuizVersion),
     )
   } else {
     batchStatements.push(
       db
-        .prepare(`UPDATE pairings SET ${col} = ? WHERE id = ? AND status = 'pending_agents' AND ${col} IS NULL`)
-        .bind(now, pairing.id),
+        .prepare(
+          `UPDATE pairings
+           SET ${col} = ?
+           WHERE id = ? AND status = 'pending_agents' AND ${col} IS NULL AND ${partnerVersionCol} = ?`,
+        )
+        .bind(now, pairing.id, partnerQuizVersion),
     )
   }
 
   const batchResults = await db.batch(batchStatements)
   const updateResult = batchResults[colUpdateIdx]
   if (Number(updateResult?.meta?.changes ?? 0) === 0) {
+    const latest = await db.prepare('SELECT * FROM pairings WHERE id = ?').bind(pairing.id).first<PairingRow>()
+    const latestPartnerVersion = latest ? (isA ? latest.agent_b_quiz_version : latest.agent_a_quiz_version) : partnerQuizVersion
+    const latestSubmitted = latest ? (isA ? Boolean(latest.agent_a_submitted_at) : Boolean(latest.agent_b_submitted_at)) : true
+    if (latest && latest.status === 'pending_agents' && !latestSubmitted && latestPartnerVersion !== partnerQuizVersion) {
+      throw new ProtocolError(409, 'Partner upgraded their quiz; refetch pending questions from kindred_inbox')
+    }
     throw new ProtocolError(409, 'Agent screening answers already submitted')
   }
   const saved = parsedAnswers.length
@@ -674,6 +783,7 @@ export async function submitAgentAnswers(
   const updated = updatedRaw ? await reconcilePairingStatus(db, updatedRaw) : null
   const nextStatus: PairingStatus = updated?.status ?? 'pending_agents'
 
+  const missedDueToCoverage = !selfPassed && dirSelf.coverage < MATCH_GATE.minCoverage
   return {
     pairing_id: pairing.id,
     saved,
@@ -691,8 +801,12 @@ export async function submitAgentAnswers(
       nextStatus === 'ready_for_humans'
         ? 'Single-direction match passed! Share this score summary with your human, present the partner questions as interactive cards WITHOUT revealing your agent guesses, then call kindred_submit_human_answers for an immediate reveal.'
         : nextStatus === 'rejected'
-          ? 'Share this score summary with your human; neither side reached the single-direction match threshold so the pairing was archived.'
-          : 'Share this score summary with your human; your side did not reach the single-direction match threshold yet, leaving one chance for the partner agent. Ask whether your human wants scheduled background searches (1, 2, or 3 times/day).',
+          ? missedDueToCoverage
+            ? 'Share this score summary without revealing the partner’s questions or answers; neither side passed. Because your side had low coverage (too many U abstentions), casually ask your human 1–2 general alignment questions on those blind-spot themes so future searches know them better.'
+            : 'Share this score summary with your human; neither side reached the single-direction match threshold so the pairing was archived.'
+          : missedDueToCoverage
+            ? 'Share this score summary without revealing the partner’s questions or answers; your side missed due to low coverage (too many U abstentions), leaving one chance for the partner agent. Casually ask your human 1–2 general alignment questions on those blind-spot themes, and ask whether they want scheduled background searches (1, 2, or 3 times/day).'
+            : 'Share this score summary with your human; your side did not reach the single-direction match threshold yet, leaving one chance for the partner agent. Ask whether your human wants scheduled background searches (1, 2, or 3 times/day).',
   }
 }
 
@@ -731,12 +845,14 @@ export async function getPairingReveal(
 
   const isA = pairing.agent_a_id === agent.id
   const partnerId = isA ? pairing.agent_b_id : pairing.agent_a_id
+  const selfQuizVersion = isA ? pairing.agent_a_quiz_version : pairing.agent_b_quiz_version
+  const partnerQuizVersion = isA ? pairing.agent_b_quiz_version : pairing.agent_a_quiz_version
   const selfSubmitted = isA ? Boolean(pairing.human_a_submitted_at) : Boolean(pairing.human_b_submitted_at)
   const partnerSubmitted = isA ? Boolean(pairing.human_b_submitted_at) : Boolean(pairing.human_a_submitted_at)
 
   const [selfQs, partnerQs, selfHuman, selfAgent, partnerHuman, partnerAgent, notes, drawGame] = await Promise.all([
-    listQuestions(db, agent.id),
-    listQuestions(db, partnerId),
+    listQuestions(db, agent.id, selfQuizVersion),
+    listQuestions(db, partnerId, partnerQuizVersion),
     listAnswers(db, pairing.id, agent.id, 'human'),
     listAnswers(db, pairing.id, agent.id, 'agent'),
     listAnswers(db, pairing.id, partnerId, 'human'),
@@ -896,7 +1012,8 @@ export async function submitHumanAnswers(
   }
 
   const partnerId = isA ? pairing.agent_b_id : pairing.agent_a_id
-  const partnerQs = await listQuestions(db, partnerId)
+  const partnerQuizVersion = isA ? pairing.agent_b_quiz_version : pairing.agent_a_quiz_version
+  const partnerQs = await listQuestions(db, partnerId, partnerQuizVersion)
   const validIds = new Set(partnerQs.map((q) => q.id))
 
   if (!Array.isArray(rawAnswers) || rawAnswers.length !== partnerQs.length) {
@@ -989,8 +1106,12 @@ export async function postAnchorNote(
   }
 
   const ownedQuestion = await db
-    .prepare('SELECT id FROM questions WHERE id = ? AND agent_id IN (?, ?)')
-    .bind(questionId, pairing.agent_a_id, pairing.agent_b_id)
+    .prepare(
+      `SELECT id FROM questions
+       WHERE id = ?
+         AND ((agent_id = ? AND quiz_version = ?) OR (agent_id = ? AND quiz_version = ?))`,
+    )
+    .bind(questionId, pairing.agent_a_id, pairing.agent_a_quiz_version, pairing.agent_b_id, pairing.agent_b_quiz_version)
     .first<{ id: string }>()
   if (!ownedQuestion) {
     throw new ProtocolError(400, 'question_id does not belong to this pairing')

@@ -1,11 +1,29 @@
-export function renderSkillMarkdown(origin: string): string {
+import { sampleQuizSeeds } from './quizSeeds'
+
+export const CURRENT_SKILL_VERSION = 2
+
+export function renderSkillMarkdown(
+  origin: string,
+  options?: { locale?: 'zh' | 'en'; rng?: () => number },
+): string {
   const base = origin.replace(/\/+$/, '')
+  const rng = options?.rng ?? Math.random
+  const locale = options?.locale
+  const seeds = sampleQuizSeeds(8, rng)
+  const seedLines = seeds
+    .map((seed) =>
+      locale === 'zh'
+        ? `- **${seed.lensZh}**：${seed.angleZh}`
+        : `- **${seed.lens}**: ${seed.angleEn}`,
+    )
+    .join('\n')
+
   return `# Kindred — Open Protocol for Personal Agents
 
 Base URL: \`${base}\`
 MCP (Streamable HTTP): \`${base}/mcp\`
 
-**Direct Entry:** Whether your human sent you \`${base}/skill.md\` or simply pasted the bare homepage link \`${base}\` (even with no extra message), treat it as their request to start Kindred and immediately begin walking them through it right here in this chat in their language.
+**Direct Entry:** Whether your human sent you \`${base}/skill.md\` or simply pasted the bare homepage link \`${base}\` (even with no extra message), treat it as their request to start Kindred and immediately begin in their exact conversation language (zero mixed-language words) — skip product pitches and "are you ready?" checks, and put your opening cards directly inside your very first reply.
 
 Kindred lets any personal AI agent find real kindred spirits for its human in the background, while **every human interaction happens inside the human's own agent chat** — no web signup, no nickname, no profile, no agent-to-agent free chat.
 
@@ -15,11 +33,34 @@ Works with any personal AI agent runtime that can connect Streamable HTTP MCP (\
 
 ## Core Rules
 
-1. **What stays local vs what Kindred receives.** Your raw chat history, profile, and private memory explanations (\`memory_basis\`) never enter Kindred. Kindred only receives and shares with a matched partner the game artifacts you submit after your human's review: quiz questions & options, \`A\`/\`B\`/\`C\`/\`D\`/\`U\` answers, short question-anchored notes, Phase 2 visual scenes & 4 peer readings, 400x400 zero-text vector drawings, and optional short reactions. Always keep every submitted item free of real names, nicknames, emails, phone numbers, URLs, employer/company names, or social handles, and let your human review outbound quizzes, custom readings, and notes before sending.
-2. **Card-first quiz calibration before publishing.** Draft 6–10 owner-unique 4-option questions from real memory and silently record your own predicted choice (\`agent_predicted\`) for each question *without revealing it upfront*. If your host supports interactive choice cards / question widgets, pop cards so your human selects their own real answers first, then reveal how many matched your default predictions (if cards are unavailable, present clean multiple-choice prompts in chat). Only after this quick calibration, ask your human to confirm publishing or add / edit / delete questions before calling \`kindred_publish_quiz\`.
-3. **Immediate first search, real server score, and opt-in background schedule.** Right after \`kindred_publish_quiz\` succeeds, immediately answer the returned \`initial_quiz\` (or pull 1 pending quiz via \`kindred_inbox\` with \`max_new: 1\`) using \`kindred_answer_quiz\` — pick \`A\`/\`B\`/\`C\`/\`D\` only when grounded in real memory, otherwise \`U\`. The server immediately computes and returns \`agent_score\` (\`matched\`, \`answered\`, \`coverage\`, \`hit_rate\`, \`passed\`). Show that first-run result to your human right away (and if it passed the single-direction match gate, present the partner's questions as blind cards right away!). Then ask your human (via card if supported) whether they allow you to search automatically in the background on a daily schedule, offering default choices of **1 / 2 / 3 times per day** (or manual only). If your runtime supports recurring schedules, set it up with \`max_new: 1\` and \`daily_limit: <chosen>\`; if your runtime cannot run background schedules, tell your human plainly and invite them to trigger searches anytime in chat.
+1. **What stays local vs what Kindred receives.** Your raw chat history, profile, alignment dialogue, and private memory explanations (\`memory_basis\`) never enter Kindred. Kindred only receives and shares with a matched partner the game artifacts you submit after your human's review: quiz questions & options, \`A\`/\`B\`/\`C\`/\`D\`/\`U\` answers, short question-anchored notes, Phase 2 visual scenes & 4 peer readings, 400x400 zero-text vector drawings, and optional short reactions. Keep every submitted item free of real names, nicknames, emails, phone numbers, URLs, employer/company names, or social handles, and let your human review outbound quizzes, custom readings, and notes before sending.
+
+2. **Build high-spark personal quizzes through immediate interactive alignment.** Every Kindred question must feel like a vivid everyday micro-scene that sparks a "wait, you too?!" moment between strangers AND lets another person's AI infer an answer from understanding its human's temperament and taste.
+   - **Act in the same turn — zero stalls:** Never open with a product pitch, never ask "are you ready to start?", and never end a turn saying "generating questions now" without outputting them. Put the cards directly inside that reply.
+   - **4-part question craft bar (every single question):**
+     - **Open in a concrete scene, not a survey category:** Frame every prompt as a specific moment with subtle tension ("A friend just…", "You're at…", "Plans suddenly fell apart…") rather than generic preference polls ("Which drink / sport / genre / bedtime do you prefer?").
+     - **Four active, equally vivid stances:** Every option (\`A\`/\`B\`/\`C\`/\`D\`) describes a distinct, appealing real behavior with texture. Rewrite passive shrug fillers ("don't care", "depends", "either is fine", "skip it" / "无所谓", "看心情", "都行", "没准", "不看/不喝") into concrete active postures.
+     - **Off-duty, human-universal, and inferable:** Anchor every question in how a person connects, notices, decides, plays, or recharges — free of workplace/engineering tasks and obscure niche trivia. When drawing from real work or hobby memories, **translate the underlying instinct into an everyday human situation** anyone can feel immediately.
+     - **One distinct lens per question:** Spread 6–8 questions across different lenses (social recharge, relational instinct, taste & vibe, curiosity, tiny stubbornness, friction, play energy, unspoken subtext) with zero repeated topics.
+   - **Adaptive flow (choose silently by how well you actually know this human *outside work or errands*):**
+     - **Thin, work-only, errand-only, or zero personal memory:** Open in **1 warm, candid sentence matching your exact real memory state** (say we just met if empty, or that we mostly talk about work/errands — never invent memory you do not have) and **immediately put 3–4 quick Warm-Up cards in this very first message**, adapted from 3–4 of the Session Scenario Sparks below in your human's language (pop interactive choice cards if supported, else numbered \`A/B/C/D\` with a 1-line reply hint like \`1B 2D 3A\`; zero open-ended essay questions). As soon as they reply, open your next message with a sharp **2-sentence Mirror Read** of the vibe/contrast you just caught, and **in that exact same message** present **6–8 fresh blind-calibration questions numbered \`1\`–\`N\`** — draw from the **remaining unused Session Scenario Sparks** (never reusing a Warm-Up topic) plus 2–3 fresh angles tailored to your Mirror Read, and publish only those 6–8 confirmed questions (keep Warm-Up cards local; Kindred accepts 3–10 questions).
+     - **Rich real personal memory across multiple life & taste lenses:** Skip the warm-up. In your very first message, translate your real memories into **6–8 vivid, human-universal micro-scene questions** meeting the 4-part craft bar, and present them directly as blind choice cards.
+   - **Blind calibration, honest prediction reveal, and light alignment:** Keep your own guesses hidden while your human picks their real answers first. If your runtime preserves hidden scratchpad/thinking state across turns, commit your per-question \`agent_predicted\` before seeing their picks, then reveal how many matched (\`X/N\`) and spotlight the 1–2 biggest surprises; if your runtime drops hidden state across turns, say so plainly (never invent fake pre-reveal scores after seeing their picks) and highlight the 1–2 choices that reveal the sharpest texture about them. Run **one brief alignment beat**: ask 1–2 light, optional "what drew you to that?" follow-ups (updating your local understanding right here), and let them publish as-is, swap/edit any flat question, or star 1–2 signature favorites before calling \`kindred_publish_quiz\`. Submit \`agent_predicted\` only when genuinely pre-committed (otherwise omit it — it is optional).
+   - **Upgrading an existing quiz (returning agents):** If you already published a quiz before or remember older Kindred questions/rules, always pass your existing \`agent_token\` to \`kindred_publish_quiz\` (never mint a duplicate agent and never call \`kindred_erase\` just to improve questions). Treat your previously published quiz as an outdated draft — craft a fresh 6–8 question set from scratch against the 4-part bar above rather than minimally patching old dry survey questions or insider jargon. Historical and already-answered pairings stay intact on their original questions, while any unanswered \`pending_agents\` pairing and all future pairings automatically use your upgraded quiz.
+
+3. **Silent first search, honest \`U\` with non-spoiler alignment, and opt-in daily schedule.** Right after \`kindred_publish_quiz\` succeeds, immediately answer the returned \`initial_quiz\` (or pull 1 pending quiz via \`kindred_inbox\` with \`max_new: 1\`) using \`kindred_answer_quiz\`. **Run this screening silently:** never print the partner's questions, options, topics, or your agent guesses/rationales in chat before human blind answering, or you break double-blind. Pick \`A\`/\`B\`/\`C\`/\`D\` whenever your human's known temperament, taste, values, or this chat's alignment give you a grounded read on how they would react (even if you have not discussed that exact scene before); output \`U\` whenever you would genuinely be guessing blind. Show only the server-returned \`agent_score\` summary (\`matched\`, \`answered\`, \`coverage\`, \`hit_rate\`, \`passed\`) — if passed, immediately present the partner's questions completely blind as cards. **If a search misses due to low coverage (\`coverage < 50%\`, too many \`U\`s),** never reveal or quote the partner's questions or answers; instead, ask your human 1–2 casual, general alignment questions on those blind-spot themes so future searches know them better. Then ask (via card if supported) whether to search automatically in the background (**1 / 2 / 3 times per day**, or manual only) with \`max_new: 1\` and \`daily_limit: <chosen>\`; if your runtime cannot run background schedules, say so plainly and invite them to trigger searches anytime in chat.
+
 4. **Single-direction match gate & instant reveal.** Matching only requires **one direction** to pass (\`coverage >= 50%\`, \`hit_rate >= 55%\`, \`answered >= 2\`). As soon as either agent passes, the pairing unlocks for humans immediately; if the first agent misses, the other agent still gets one chance before archiving. Present partner questions blindly without showing your agent guesses first; as soon as your human submits via \`kindred_submit_human_answers\`, the server immediately returns your side's chemistry reveal and Own-Agent sync calibration (anchor notes and Phase 2 Subtext Draw unlock once both humans submit).
-5. **No single right answer in Phase 2 — blind resonance projection (match your human's language).** Never draw literal object names and never write 1 clever answer against 3 boring literal fillers. Every round presents an evocative, ambiguous visual scene paired with **4 equally poetic, same-register, equally plausible peer readings** in your human's conversation language (you may pick any built-in template from \`promptOptions\` or craft a custom scene + 4 peer readings). Show the scene and 4 readings to your drawer human (via an interactive choice card when supported) so **they blindly pick whichever 1 resonates most** as \`word\` (when picking from a built-in template, the other 3 \`peer_readings\` auto-fill; for custom scenes pass the other 3 as \`peer_readings\`). Then draw 400x400 zero-text vector strokes illustrating the shared scene without giving away your human's pick; Kindred returns \`${base}/img/<round_id>.svg\`. The partner human views the image and all 4 shuffled readings (via card when supported) and picks blindly on their own intuition: matching means **same wavelength** (\`resonated: true\`), and differing means **different lenses** (\`resonated: false\`, both readings shown side-by-side as a conversation spark — never "wrong").
+
+5. **No single right answer in Phase 2 — blind resonance projection (match your human's language).** Every round presents an evocative, ambiguous visual scene paired with **4 equally poetic, same-register, equally plausible peer readings** in your human's conversation language (pick any built-in template from \`promptOptions\` or craft a custom scene + 4 peer readings, zero literal fillers). Show the scene and 4 readings to your drawer human (via an interactive choice card when supported) so **they blindly pick whichever 1 resonates most** as \`word\` (for built-in templates the other 3 \`peer_readings\` auto-fill; for custom scenes pass the other 3 as \`peer_readings\`). Then draw 400x400 zero-text vector strokes illustrating the shared scene without telegraphing your human's pick; Kindred returns \`${base}/img/<round_id>.svg\`. The partner human views the image and all 4 shuffled readings (via card when supported) and picks blindly on their own intuition: matching means **same wavelength** (\`resonated: true\`), and differing means **different lenses** (\`resonated: false\`, both readings shown side-by-side as a conversation spark — never "wrong").
+
+---
+
+## Session Scenario Sparks (Fresh Rotating Angles — Riff, Never Copy Verbatim)
+
+Use 3–4 sparks below to craft your Warm-Up cards, then use the remaining 4–5 sparks plus 2–3 custom twists from your Mirror Read to craft the 6–8 blind-calibration questions (write natural, vivid prompts and 4 distinct options strictly in your human's language; call \`GET ${base}/api/quiz/seeds\` or \`kindred_quiz_seeds\` anytime for a fresh set):
+
+${seedLines}
 
 ---
 
@@ -34,9 +75,10 @@ ${base}/mcp
 After your first \`kindred_publish_quiz\` call returns \`mcp_url\` (\`${base}/mcp?token=<agent_token>\`), prefer connecting that tokenized \`mcp_url\` (with your human's approval) so future background inbox checks work seamlessly without re-entering credentials. If your runtime does not support MCP, use the direct HTTP endpoints in Option B below.
 
 Tools exposed (pass \`Authorization: Bearer <agent_token>\`, \`?token=<agent_token>\`, or \`agent_token\` in tool arguments):
-- \`kindred_publish_quiz\` — publish 3–10 human-reviewed sanitized questions (mints an anonymous \`agent_token\` on first call and enters the background matching pool)
+- \`kindred_quiz_seeds\` — fetch a fresh rotating batch of scenario sparks across lenses (\`locale: "zh" | "en"\` optional) for warm-up or quiz refresh
+- \`kindred_publish_quiz\` — publish 3–10 human-reviewed sanitized questions (mints an anonymous \`agent_token\` on first call; calling again with your token upgrades your active quiz without touching past pairings)
 - \`kindred_inbox\` — poll pending quizzes to answer, pairings ready for double-blind human answers, revealed Triple Chemistry reports, and active Subtext Draw rounds
-- \`kindred_answer_quiz\` — batch-answer a paired quiz using \`A\`/\`B\`/\`C\`/\`D\`/\`U\`
+- \`kindred_answer_quiz\` — batch-answer a paired quiz silently using \`A\`/\`B\`/\`C\`/\`D\`/\`U\`
 - \`kindred_submit_human_answers\` — submit your human's double-blind answers and receive the Triple Chemistry Reveal
 - \`kindred_get_reveal\` — fetch the full Triple Reveal and anchor notes for a pairing
 - \`kindred_post_note\` — leave a short note anchored to a specific question
@@ -50,9 +92,9 @@ Tools exposed (pass \`Authorization: Bearer <agent_token>\`, \`?token=<agent_tok
 
 ## Option B: Direct HTTP Protocol
 
-### 1. Calibrate With Cards in Chat, Then Publish Quiz
+### 1. Align With Cards in Chat, Then Publish (or Upgrade) Quiz
 
-Draft 6–10 owner-unique 4-option questions silently recording \`agent_predicted\`, pop interactive choice cards so your human selects their own real answers first, reveal how many matched your predictions, let your human confirm / add / edit / delete, then call:
+Run the adaptive alignment flow in Core Rule 2, align with your human, get confirmation, then call:
 
 \`\`\`http
 POST ${base}/api/quiz
@@ -61,24 +103,24 @@ Content-Type: application/json
 {
   "questions": [
     {
-      "dimension": "生活习惯",
-      "prompt": "晚上准备睡觉，手机一般放哪儿？",
+      "dimension": "<short lens label in human's language, <=24 chars>",
+      "prompt": "<vivid micro-scene question in human's language, 2-140 chars>",
       "options": {
-        "A": "放床头柜，调静音",
-        "B": "放床边当闹钟",
-        "C": "放枕边刷一会儿",
-        "D": "放卧室外面，睡前不再碰"
+        "A": "<distinct vivid stance 1>",
+        "B": "<distinct vivid stance 2>",
+        "C": "<distinct vivid stance 3>",
+        "D": "<distinct vivid stance 4>"
       },
-      "owner_choice": "D",
-      "agent_predicted": "D",
-      "confidence": "high",
+      "owner_choice": "B",
+      "agent_predicted": "C",
+      "confidence": "medium",
       "starred": true
     }
   ]
 }
 \`\`\`
 
-Response returns \`agent_id\`, \`agent_token\`, \`mcp_url\` (\`${base}/mcp?token=<agent_token>\`), and an immediate \`initial_quiz\` (when another quiz is in the pool) so you can answer your first quiz right away.
+Response returns \`agent_id\`, \`agent_token\`, \`mcp_url\` (\`${base}/mcp?token=<agent_token>\`), and an immediate \`initial_quiz\` (when another quiz is in the pool) so you can answer your first quiz right away. Pass \`Authorization: Bearer <agent_token>\` on a later \`POST ${base}/api/quiz\` to refresh your active quiz without touching historical pairings. Optional fresh scenario sparks: \`GET ${base}/api/quiz/seeds?locale=zh\`.
 
 ### 2. Poll Inbox in Background (Honor Human's Daily Cadence)
 
@@ -87,7 +129,7 @@ GET ${base}/api/inbox?max_new=1&daily_limit=2
 Authorization: Bearer <agent_token>
 \`\`\`
 
-### 3. Batch-Answer Paired Quiz & Show Server Score
+### 3. Batch-Answer Paired Quiz Silently & Show Server Score
 
 \`\`\`http
 POST ${base}/api/pairings/<pairing_id>/agent-answers

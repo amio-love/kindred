@@ -8,17 +8,40 @@ export interface KindredToolDescriptor {
 
 export const KINDRED_TOOLS: readonly KindredToolDescriptor[] = [
   {
-    name: 'kindred_publish_quiz',
-    title: 'Publish Kindred Quiz',
+    name: 'kindred_quiz_seeds',
+    title: 'Get Rotating Quiz Scenario Sparks',
     description:
-      'Publish 3 to 10 human-reviewed, privacy-clean 4-option personal questions (no real names, contacts, or handles) and enter the background kindred-spirit discovery pool. Mints an anonymous agent_token on first call.',
+      'Fetch a fresh rotating batch of vivid, human-universal scenario sparks across distinct lenses for warm-up cards or quiz drafting/upgrades.',
+    readOnlyHint: true,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        locale: {
+          type: 'string',
+          enum: ['zh', 'en'],
+          description: 'Optional preferred language for returned scenario sparks.',
+        },
+        count: {
+          type: 'integer',
+          minimum: 1,
+          maximum: 8,
+          description: 'Number of distinct-lens scenario sparks to return (default 8).',
+        },
+      },
+    },
+  },
+  {
+    name: 'kindred_publish_quiz',
+    title: 'Publish or Upgrade Kindred Quiz',
+    description:
+      'Publish 3 to 10 human-reviewed, privacy-clean 4-option personal questions (no real names, contacts, or handles) and enter the background kindred-spirit discovery pool. Mints an anonymous agent_token on first call; passing an existing agent_token safely upgrades your active quiz version while keeping past pairings intact and updating unanswered pending pairings.',
     readOnlyHint: false,
     inputSchema: {
       type: 'object',
       properties: {
         agent_token: {
           type: 'string',
-          description: 'Optional existing anonymous agent_token to replace an existing quiz.',
+          description: 'Optional existing anonymous agent_token to upgrade an existing quiz without losing past pairings.',
         },
         questions: {
           type: 'array',
@@ -55,7 +78,7 @@ export const KINDRED_TOOLS: readonly KindredToolDescriptor[] = [
     name: 'kindred_inbox',
     title: 'Poll Kindred Inbox',
     description:
-      'Fetch pending paired quizzes for agent screening, single-direction matches ready for human answers, revealed chemistry reports, and active Subtext Draw rounds. Pass max_new (default 1 when searching one quiz at a time) and daily_limit (1, 2, or 3) to honor the human’s chosen daily search cadence.',
+      'Fetch pending paired quizzes for silent agent screening, single-direction matches ready for human answers, revealed chemistry reports, active Subtext Draw rounds, and any protocol_update notice when newer skill rules are available. Pass max_new (default 1 when searching one quiz at a time) and daily_limit (1, 2, or 3) to honor the human’s chosen daily search cadence.',
     readOnlyHint: false,
     inputSchema: {
       type: 'object',
@@ -78,9 +101,9 @@ export const KINDRED_TOOLS: readonly KindredToolDescriptor[] = [
   },
   {
     name: 'kindred_answer_quiz',
-    title: 'Submit Agent Quiz Answers',
+    title: 'Submit Agent Quiz Answers Silently',
     description:
-      'Batch-answer a paired quiz on your human’s behalf using A/B/C/D when grounded in real memory, or U to honestly abstain. Immediately returns server-scored agent_score and triggers a single-direction match as soon as coverage >= 50% and hit_rate >= 55%.',
+      'Silently batch-answer a paired quiz on your human’s behalf without printing partner questions or guesses in chat, using A/B/C/D when grounded in memory or alignment, or U when genuinely unsure. Immediately returns server-scored agent_score and triggers a single-direction match as soon as coverage >= 50% and hit_rate >= 55%.',
     readOnlyHint: false,
     inputSchema: {
       type: 'object',

@@ -5,6 +5,7 @@ import {
   eraseAgent,
   getInbox,
   getPairingReveal,
+  getQuizSeeds,
   guessDrawing,
   pickDrawWord,
   postAnchorNote,
@@ -36,6 +37,16 @@ function handleError(c: Context<{ Bindings: Env }>, err: unknown) {
 
 export function createProtocolRoutes() {
   const app = new Hono<{ Bindings: Env }>()
+
+  app.get('/quiz/seeds', (c) => {
+    const url = new URL(c.req.url)
+    const rawLocale = url.searchParams.get('locale')?.trim().toLowerCase()
+    const locale = rawLocale === 'zh' || rawLocale === 'en' ? rawLocale : undefined
+    const rawCount = url.searchParams.get('count')
+    const count = rawCount !== null && Number.isFinite(Number(rawCount)) ? Number(rawCount) : undefined
+    c.header('Cache-Control', 'no-store')
+    return c.json(getQuizSeeds({ locale, count }))
+  })
 
   app.post('/quiz', async (c) => {
     try {

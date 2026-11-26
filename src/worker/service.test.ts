@@ -265,11 +265,6 @@ describe('Phase 1 quiz publishing, screening gates, and double-blind immutabilit
     assert.equal('partner_questions' in revPending, false)
 
     await assert.rejects(
-      () => publishQuiz(dbCov, ORIGIN, covPending.tokenA, buildQuestions('replace-pending')),
-      /Cannot replace quiz while active or revealed pairings exist/i,
-    )
-
-    await assert.rejects(
       () =>
         submitAgentAnswers(dbCov, covPending.tokenA, covPending.pairingId, [
           { question_id: covPending.pairA.questions[0]!.id, choice: 'A' },
@@ -294,6 +289,7 @@ describe('Phase 1 quiz publishing, screening gates, and double-blind immutabilit
     assert.equal(missA.agent_score.passed, false)
     assert.equal(missA.agent_score.matched, 1)
     assert.equal(missA.pairing_status, 'pending_agents')
+    assert.match(missA.next_step, /low coverage/i)
     const covRes = await submitAgentAnswers(
       dbCov,
       covPending.tokenB,
@@ -309,13 +305,15 @@ describe('Phase 1 quiz publishing, screening gates, and double-blind immutabilit
       () => submitHumanAnswers(dbCov, ORIGIN, covPending.tokenA, covPending.pairingId, mapMatchingAnswers(covPending.pairA.questions, covPending.qsB)),
       /has not passed agent screening/i,
     )
-    const replacedAfterReject = await publishQuiz(dbCov, ORIGIN, covPending.tokenA, buildQuestions('after-reject'))
-    assert.equal(replacedAfterReject.published_count, 4)
-    const replacedCount = await dbCov
-      .prepare('SELECT COUNT(*) AS cnt FROM questions WHERE agent_id = ?')
-      .bind(replacedAfterReject.agent_id)
+    const upgradedAfterReject = await publishQuiz(dbCov, ORIGIN, covPending.tokenA, buildQuestions('after-reject'))
+    assert.equal(upgradedAfterReject.published_count, 4)
+    assert.equal(upgradedAfterReject.quiz_version, 2)
+    assert.equal(upgradedAfterReject.upgraded, true)
+    const upgradedVersionCount = await dbCov
+      .prepare('SELECT COUNT(*) AS cnt FROM questions WHERE agent_id = ? AND quiz_version = 2')
+      .bind(upgradedAfterReject.agent_id)
       .first<{ cnt: number }>()
-    assert.equal(Number(replacedCount?.cnt ?? 0), 4)
+    assert.equal(Number(upgradedVersionCount?.cnt ?? 0), 4)
 
     const agentBarrier = createBarrier(2)
     const humanBarrier = createBarrier(2)
@@ -351,10 +349,6 @@ describe('Phase 1 quiz publishing, screening gates, and double-blind immutabilit
     assert.ok(readyQ)
     assert.deepEqual(Object.keys(readyQ).sort(), SAFE_QUESTION_KEYS)
 
-    await assert.rejects(
-      () => publishQuiz(db, ORIGIN, pending.tokenA, buildQuestions('replace-ready')),
-      /Cannot replace quiz while active or revealed pairings exist/i,
-    )
     const outsider = await publishQuiz(db, ORIGIN, null, buildQuestions('outsider-p1'))
     await assert.rejects(
       () => submitAgentAnswers(db, outsider.agent_token, pending.pairingId, mapMatchingAnswers(pending.pairA.questions, pending.qsB)),
@@ -852,61 +846,144 @@ describe('Phase 1 quiz publishing, screening gates, and double-blind immutabilit
       .first<{ status: string }>()
     assert.equal(afterMixed?.status, 'pending_agents')
 
-    let injectBlockingPairing = false
-    let injectedAgentId = ''
-    let injectedPartnerId = ''
-    const dbReplace = createSqliteD1({
+    const upgradeBarrier = createBarrier(2)
+    let interleaveUpgrade = false
+    const dbUpgradeRace = createSqliteD1({
       beforeExecuteSql: async (sql, op) => {
-        if (injectBlockingPairing && op === 'batch' && /DELETE FROM questions WHERE agent_id = \?/i.test(sql)) {
-          injectBlockingPairing = false
-          const [aId, bId] =
-            injectedAgentId < injectedPartnerId
-              ? [injectedAgentId, injectedPartnerId]
-              : [injectedPartnerId, injectedAgentId]
-          await dbReplace
-            .prepare(
-              `INSERT INTO pairings (id, agent_a_id, agent_b_id, status, created_at)
-               VALUES ('pr_race_block', ?, ?, 'pending_agents', ?)`,
-            )
-            .bind(aId, bId, new Date().toISOString())
-            .run()
+        if (interleaveUpgrade && op === 'batch' && /SET current_quiz_version = \?/i.test(sql)) {
+          await upgradeBarrier()
         }
       },
     })
-    const origA = await publishQuiz(dbReplace, ORIGIN, null, buildQuestions('orig-a'))
-    const origB = await publishQuiz(dbReplace, ORIGIN, null, buildQuestions('orig-b'))
-    await dbReplace.prepare('DELETE FROM pairings').run()
-    const beforeQs = await dbReplace
-      .prepare('SELECT id FROM questions WHERE agent_id = ? ORDER BY position ASC')
+    const origA = await publishQuiz(dbUpgradeRace, ORIGIN, null, buildQuestions('orig-a'))
+    interleaveUpgrade = true
+    const upgradeRace = await Promise.allSettled([
+      publishQuiz(dbUpgradeRace, ORIGIN, origA.agent_token, buildQuestions('race-v2-a')),
+      publishQuiz(dbUpgradeRace, ORIGIN, origA.agent_token, buildQuestions('race-v2-b')),
+    ])
+    interleaveUpgrade = false
+    assert.equal(upgradeRace.filter((r) => r.status === 'fulfilled').length, 1)
+    assert.equal(upgradeRace.filter((r) => r.status === 'rejected').length, 1)
+    const v2Count = await dbUpgradeRace
+      .prepare('SELECT COUNT(*) AS cnt FROM questions WHERE agent_id = ? AND quiz_version = 2')
       .bind(origA.agent_id)
-      .all<{ id: string }>()
-    injectedAgentId = origA.agent_id
-    injectedPartnerId = origB.agent_id
-    injectBlockingPairing = true
-    await assert.rejects(
-      () => publishQuiz(dbReplace, ORIGIN, origA.agent_token, buildQuestions('raced-replace')),
-      /Cannot replace quiz while active or revealed pairings exist/i,
-    )
-    const afterQs = await dbReplace
-      .prepare('SELECT id FROM questions WHERE agent_id = ? ORDER BY position ASC')
-      .bind(origA.agent_id)
-      .all<{ id: string }>()
-    assert.deepEqual(
-      (afterQs.results ?? []).map((r) => r.id),
-      (beforeQs.results ?? []).map((r) => r.id),
-    )
+      .first<{ cnt: number }>()
+    assert.equal(Number(v2Count?.cnt ?? -1), 4)
   })
 
-  test('enforces participant 403 on reveal/notes/startDraw, protects revealed pairings from republish, validates note ownership, and erases data', async () => {
+  test('supports non-destructive soft-version upgrades, refreshes unanswered pending pairings, isolates historical reveals, and signals protocol_update once', async () => {
+    const db = createSqliteD1()
+    const { tokenA, tokenB, pairingId, qsA, qsB, pairB } = await setupPendingPairing(db)
+
+    await db.prepare('UPDATE agents SET skill_version = 1').run()
+    const legacyInboxA = await getInbox(db, ORIGIN, tokenA)
+    assert.ok(legacyInboxA.protocol_update)
+    assert.equal(legacyInboxA.protocol_update?.current_skill_version, 2)
+    assert.equal(legacyInboxA.protocol_update?.your_quiz_skill_version, 1)
+    assert.equal(legacyInboxA.protocol_update?.skill_url, `${ORIGIN}/skill.md`)
+
+    const v2QsA = buildQuestions('alpha-v2')
+    const upgradedA = await publishQuiz(db, ORIGIN, tokenA, v2QsA)
+    assert.equal(upgradedA.quiz_version, 2)
+    assert.equal(upgradedA.upgraded, true)
+    assert.equal(upgradedA.pending_pairings_refreshed, 1)
+
+    const freshInboxA = await getInbox(db, ORIGIN, tokenA)
+    assert.equal(freshInboxA.protocol_update, null)
+    assert.equal(freshInboxA.current_quiz_version, 2)
+    assert.equal(freshInboxA.skill_version, 2)
+
+    await assert.rejects(
+      () => submitAgentAnswers(db, tokenB, pairingId, mapMatchingAnswers(pairB.questions, qsA)),
+      /Invalid question_id/i,
+    )
+
+    const refreshedInboxB = await getInbox(db, ORIGIN, tokenB)
+    const refreshedPairB = refreshedInboxB.pending_quizzes.find((p) => p.pairing_id === pairingId)!
+    assert.ok(refreshedPairB.questions.every((q) => q.prompt.startsWith('alpha-v2')))
+
+    const screenB = await submitAgentAnswers(db, tokenB, pairingId, mapMatchingAnswers(refreshedPairB.questions, v2QsA))
+    assert.equal(screenB.pairing_status, 'ready_for_humans')
+
+    const v3QsA = buildQuestions('alpha-v3')
+    const upgradedAgain = await publishQuiz(db, ORIGIN, tokenA, v3QsA)
+    assert.equal(upgradedAgain.quiz_version, 3)
+    assert.equal(upgradedAgain.pending_pairings_refreshed, 0)
+
+    const blindA = (await getPairingReveal(db, ORIGIN, tokenA, pairingId)) as {
+      partner_questions: Array<{ id: string; prompt: string; options: QuestionOptions }>
+    }
+    const blindB = (await getPairingReveal(db, ORIGIN, tokenB, pairingId)) as {
+      partner_questions: Array<{ id: string; prompt: string; options: QuestionOptions }>
+    }
+    assert.ok(blindB.partner_questions.every((q) => q.prompt.startsWith('alpha-v2')))
+
+    await submitHumanAnswers(db, ORIGIN, tokenA, pairingId, mapMatchingAnswers(blindA.partner_questions, qsB))
+    const revealed = (await submitHumanAnswers(
+      db,
+      ORIGIN,
+      tokenB,
+      pairingId,
+      mapMatchingAnswers(blindB.partner_questions, v2QsA),
+    )) as { phase: string; breakdown: Array<{ author: string; prompt: string }> }
+    assert.equal(revealed.phase, 'revealed')
+    assert.ok(revealed.breakdown.filter((b) => b.author === 'partner').every((b) => b.prompt.startsWith('alpha-v2')))
+
+    const v3Question = await db
+      .prepare('SELECT id FROM questions WHERE agent_id = ? AND quiz_version = 3 LIMIT 1')
+      .bind(upgradedA.agent_id)
+      .first<{ id: string }>()
+    await assert.rejects(
+      () => postAnchorNote(db, tokenA, pairingId, v3Question!.id, 'Wrong version note'),
+      /does not belong to this pairing/i,
+    )
+
+    const pubC = await publishQuiz(db, ORIGIN, null, buildQuestions('gamma'))
+    const inboxC = await getInbox(db, ORIGIN, pubC.agent_token)
+    const pairWithA = inboxC.pending_quizzes.find((p) => p.questions.some((q) => q.prompt.startsWith('alpha-v3')))
+    assert.ok(pairWithA)
+
+    let raceUpgraded = false
+    const dbAnswerRace = createSqliteD1({
+      beforeExecuteSql: async (sql, op) => {
+        if (!raceUpgraded && op === 'batch' && /INSERT INTO quiz_answers/i.test(sql)) {
+          raceUpgraded = true
+          await publishQuiz(dbAnswerRace, ORIGIN, racePending.tokenA, buildQuestions('race-new-v2'))
+        }
+      },
+    })
+    const racePending = await setupPendingPairing(dbAnswerRace)
+    await assert.rejects(
+      () =>
+        submitAgentAnswers(
+          dbAnswerRace,
+          racePending.tokenB,
+          racePending.pairingId,
+          mapMatchingAnswers(racePending.pairB.questions, racePending.qsA),
+        ),
+      /Partner upgraded their quiz/i,
+    )
+    const raceAnswers = await dbAnswerRace
+      .prepare('SELECT COUNT(*) AS cnt FROM quiz_answers WHERE pairing_id = ?')
+      .bind(racePending.pairingId)
+      .first<{ cnt: number }>()
+    assert.equal(Number(raceAnswers?.cnt ?? -1), 0)
+  })
+
+  test('enforces participant 403 on reveal/notes/startDraw, isolates revealed pairings during republish, validates note ownership, and erases data', async () => {
     const db = createSqliteD1()
     const { tokenA, tokenB, pairingId, questionId } = await setupRevealedPairing(db)
 
     await postAnchorNote(db, tokenA, pairingId, questionId, 'Exact same evening habit!')
 
-    await assert.rejects(
-      () => publishQuiz(db, ORIGIN, tokenB, buildQuestions('replacement')),
-      /Cannot replace quiz while active or revealed pairings exist/i,
-    )
+    const upgradedB = await publishQuiz(db, ORIGIN, tokenB, buildQuestions('replacement'))
+    assert.equal(upgradedB.quiz_version, 2)
+    const revealAfterUpgrade = (await getPairingReveal(db, ORIGIN, tokenA, pairingId)) as {
+      phase: string
+      breakdown: Array<{ author: string; prompt: string }>
+    }
+    assert.equal(revealAfterUpgrade.phase, 'revealed')
+    assert.ok(revealAfterUpgrade.breakdown.filter((b) => b.author === 'partner').every((b) => b.prompt.startsWith('beta')))
 
     const pubC = await publishQuiz(db, ORIGIN, null, buildQuestions('outsider'))
     await assert.rejects(

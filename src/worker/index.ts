@@ -30,32 +30,43 @@ app.use(
   }),
 )
 
-function buildMarkdownSkillResponse(origin: string, isHead: boolean, varyHeader?: string): Response {
-  const body = renderSkillMarkdown(origin)
+function buildMarkdownSkillResponse(
+  origin: string,
+  isHead: boolean,
+  varyHeader?: string,
+  locale?: 'zh' | 'en',
+): Response {
+  const body = renderSkillMarkdown(origin, { locale })
   const headers: Record<string, string> = {
     'Content-Type': 'text/markdown; charset=utf-8',
-    'Cache-Control': 'public, max-age=60',
+    'Cache-Control': 'no-store',
     Link: DISCOVERY_LINK_HEADER,
   }
   if (varyHeader) headers.Vary = varyHeader
   return new Response(isHead ? null : body, { status: 200, headers })
 }
 
+function parseLocaleParam(url: URL): 'zh' | 'en' | undefined {
+  const raw = url.searchParams.get('locale')?.trim().toLowerCase()
+  return raw === 'zh' || raw === 'en' ? raw : undefined
+}
+
 app.on(['GET', 'HEAD'], '/skill.md', (c) => {
-  const origin = new URL(c.req.url).origin
-  return buildMarkdownSkillResponse(origin, c.req.method === 'HEAD')
+  const url = new URL(c.req.url)
+  return buildMarkdownSkillResponse(url.origin, c.req.method === 'HEAD', undefined, parseLocaleParam(url))
 })
 
 app.on(['GET', 'HEAD'], '/llms.txt', (c) => {
-  const origin = new URL(c.req.url).origin
-  return buildMarkdownSkillResponse(origin, c.req.method === 'HEAD')
+  const url = new URL(c.req.url)
+  return buildMarkdownSkillResponse(url.origin, c.req.method === 'HEAD', undefined, parseLocaleParam(url))
 })
 
 app.on(['GET', 'HEAD'], '/', async (c) => {
-  const origin = new URL(c.req.url).origin
+  const url = new URL(c.req.url)
+  const origin = url.origin
   const isHead = c.req.method === 'HEAD'
   if (prefersMarkdownResponse(c.req.raw)) {
-    return buildMarkdownSkillResponse(origin, isHead, 'Accept, User-Agent')
+    return buildMarkdownSkillResponse(origin, isHead, 'Accept, User-Agent', parseLocaleParam(url))
   }
 
   const assetUrl = new URL('/index.html', c.req.url)

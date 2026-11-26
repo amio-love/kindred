@@ -157,7 +157,36 @@ describe('Streamable HTTP MCP, CORS, and route boundary compliance', () => {
     }>
     assert.equal(items.length, 2)
     assert.equal(items[0]?.result?.protocolVersion, '2025-03-26')
-    assert.equal(items[1]?.result?.tools?.length, 11)
+    assert.equal(items[1]?.result?.tools?.length, 12)
+
+    const seedsCall = await app.request(
+      'https://kindred.example.test/mcp',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 21,
+          method: 'tools/call',
+          params: { name: 'kindred_quiz_seeds', arguments: { locale: 'zh', count: 4 } },
+        }),
+      },
+      env,
+    )
+    assert.equal(seedsCall.status, 200)
+    const seedsPayload = (await seedsCall.json()) as {
+      result?: { isError?: boolean; structuredContent?: { count?: number; seeds?: Array<{ lens: string; angle: string }> } }
+    }
+    assert.equal(seedsPayload.result?.isError, false)
+    assert.equal(seedsPayload.result?.structuredContent?.count, 4)
+    assert.equal(new Set(seedsPayload.result?.structuredContent?.seeds?.map((s) => s.lens)).size, 4)
+
+    const httpSeeds = await app.request('https://kindred.example.test/api/quiz/seeds?locale=en&count=6', { method: 'GET' }, env)
+    assert.equal(httpSeeds.status, 200)
+    assert.equal(httpSeeds.headers.get('Cache-Control'), 'no-store')
+    const httpSeedsBody = (await httpSeeds.json()) as { count: number; seeds: Array<{ lens: string; angle: string }> }
+    assert.equal(httpSeedsBody.count, 6)
+    assert.equal(new Set(httpSeedsBody.seeds.map((s) => s.lens)).size, 6)
 
     const okCall = await app.request(
       'https://kindred.example.test/mcp',
@@ -327,10 +356,13 @@ describe('Streamable HTTP MCP, CORS, and route boundary compliance', () => {
       const ok = await app.request(`https://kindred.example.test${path}`, { method: 'GET' }, env)
       assert.equal(ok.status, 200)
       assert.match(ok.headers.get('Content-Type') ?? '', /text\/markdown/)
+      assert.equal(ok.headers.get('Cache-Control'), 'no-store')
       assert.match(ok.headers.get('Link') ?? '', /rel="alternate"/)
       const text = await ok.text()
       assert.ok(text.includes('https://kindred.example.test/mcp'))
       assert.ok(text.includes('Direct Entry:'))
+      assert.ok(text.includes('Session Scenario Sparks'))
+      assert.ok(text.includes('Upgrading an existing quiz'))
     }
 
     for (const badPath of ['/skill.md%EF%BC%8C%E7%84%B6%E5%90%8E', '/api', '/api/none', '/mcp/extra']) {
