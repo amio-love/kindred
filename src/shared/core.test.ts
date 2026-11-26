@@ -1,8 +1,12 @@
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 import {
+  SUBTEXT_PROMPT_POOL,
+  SUBTEXT_PROMPT_POOL_EN,
   buildShuffledSubtextOptions,
+  findSubtextTemplate,
   isCorrectGuess,
+  pickRoundPrompts,
   strokesToStaticSvg,
   validateStrokes,
 } from './drawing'
@@ -10,6 +14,7 @@ import {
   buildAgentSyncReport,
   evaluateDirection,
   passesAgentMatchGate,
+  passesSingleDirectionGate,
   shuffleQuestionOptions,
 } from './quiz'
 import type { StoredQuestion } from './types'
@@ -75,13 +80,18 @@ describe('Option shuffling and paired matching gate', () => {
     ])
 
     assert.equal(highAbstain.hitRate, 1)
-    assert.equal(passesAgentMatchGate(highAbstain, goodPartner), false)
+    assert.equal(passesSingleDirectionGate(highAbstain), false)
     assert.equal(lowCoverage.answered, 2)
     assert.equal(lowCoverage.hitRate, 1)
-    assert.equal(passesAgentMatchGate(lowCoverage, goodPartner), false)
+    assert.equal(passesSingleDirectionGate(lowCoverage), false)
     assert.equal(lowHitRate.coverage >= 0.5, true)
     assert.equal(lowHitRate.hitRate, 0.5)
-    assert.equal(passesAgentMatchGate(lowHitRate, goodPartner), false)
+    assert.equal(passesSingleDirectionGate(lowHitRate), false)
+    assert.equal(passesSingleDirectionGate(goodPartner), true)
+    assert.equal(passesAgentMatchGate(highAbstain, lowHitRate), false)
+    assert.equal(passesAgentMatchGate(lowCoverage, lowHitRate), false)
+    assert.equal(passesAgentMatchGate(highAbstain, goodPartner), true)
+    assert.equal(passesAgentMatchGate(goodPartner, lowHitRate), true)
     assert.equal(passesAgentMatchGate(goodPartner, goodPartner), true)
   })
 
@@ -192,30 +202,52 @@ describe('Static SVG drawing compiler and guess matching', () => {
     }
   })
 
-  test('shuffles 1 true subtext with 3 surface literal decoys into varying keys while preserving all texts', () => {
-    const trueSubtext = '舍不得今天结束的报复性熬夜'
-    const decoys = ['半夜还在赶方案加班', '忘了关电脑就睡着了', '晚上喝太多茶失眠了'] as const
+  test('shuffles 4 peer readings into varying keys while preserving drawer reading and auto-fills any reading from built-in templates', () => {
+    const template = SUBTEXT_PROMPT_POOL[0]!
+    const drawerReading = template.readings[1]
+    const peers = [template.readings[0], template.readings[2], template.readings[3]] as const
 
-    const first = buildShuffledSubtextOptions(trueSubtext, decoys, () => 0)
-    const second = buildShuffledSubtextOptions(trueSubtext, decoys, () => 0.99)
+    const first = buildShuffledSubtextOptions(drawerReading, peers, () => 0)
+    const second = buildShuffledSubtextOptions(drawerReading, peers, () => 0.99)
 
-    assert.equal(first.options[first.correctOption], trueSubtext)
-    assert.equal(second.options[second.correctOption], trueSubtext)
+    assert.equal(first.options[first.correctOption], drawerReading)
+    assert.equal(second.options[second.correctOption], drawerReading)
     assert.notEqual(first.correctOption, second.correctOption)
 
     for (const result of [first, second]) {
       const values = new Set(Object.values(result.options))
       assert.equal(values.size, 4)
-      assert.ok(values.has(trueSubtext))
-      for (const decoy of decoys) {
-        assert.ok(values.has(decoy))
+      assert.ok(values.has(drawerReading))
+      for (const peer of peers) {
+        assert.ok(values.has(peer))
       }
     }
+
+    for (const pool of [SUBTEXT_PROMPT_POOL, SUBTEXT_PROMPT_POOL_EN]) {
+      assert.equal(pool.length, 12)
+      for (const item of pool) {
+        assert.equal(item.readings.length, 4)
+        for (const reading of item.readings) {
+          assert.ok(reading.length >= 2 && reading.length <= 48, `Out-of-bounds reading: ${reading}`)
+          const found = findSubtextTemplate(reading)
+          assert.ok(found, `Expected template lookup for: ${reading}`)
+          assert.equal(found.peerReadings.length, 3)
+          assert.equal(found.peerReadings.includes(reading), false)
+        }
+      }
+    }
+
+    const round2 = pickRoundPrompts([SUBTEXT_PROMPT_POOL[0]!.readings[2]], 0, 'zh')
+    assert.equal(round2.length, 3)
+    assert.equal(
+      round2.some((t) => t.readings.includes(SUBTEXT_PROMPT_POOL[0]!.readings[2])),
+      false,
+    )
   })
 
   test('matches normalized Chinese and English guesses', () => {
-    assert.equal(isCorrectGuess('湘北平交道的那个夏天', '  湘北平交道的那个夏天！ '), true)
-    assert.equal(isCorrectGuess('舍不得今天结束的报复性熬夜', '舍不得今天结束的报复性熬夜'), true)
-    assert.equal(isCorrectGuess('湘北平交道的那个夏天', '夏天'), false)
+    assert.equal(isCorrectGuess('灌篮高手：电车开过去，湘北的夏天就结束了', '  灌篮高手：电车开过去，湘北的夏天就结束了！ '), true)
+    assert.equal(isCorrectGuess('舍不得今天结束，宁愿把深夜浪费在空白里', '舍不得今天结束，宁愿把深夜浪费在空白里'), true)
+    assert.equal(isCorrectGuess('灌篮高手：电车开过去，湘北的夏天就结束了', '夏天'), false)
   })
 })

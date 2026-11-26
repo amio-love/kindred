@@ -901,9 +901,14 @@ a:focus-visible {
   padding: 2px 7px;
   border-radius: 999px;
   white-space: nowrap;
-  background: rgba(255, 92, 53, 0.16);
-  color: #ff8a6b;
+  background: rgba(245, 184, 92, 0.18);
+  color: #f7cb79;
   flex-shrink: 0;
+}
+
+.subtext-opt-tag--yours {
+  background: rgba(245, 184, 92, 0.18);
+  color: #f7cb79;
 }
 
 .subtext-opt-tag--hit {
@@ -911,15 +916,15 @@ a:focus-visible {
   color: #6ef2c4;
 }
 
-.subtext-opt--surface {
-  border-color: rgba(255, 92, 53, 0.42);
-  background: rgba(255, 92, 53, 0.09);
+.subtext-opt--yours {
+  border-color: rgba(245, 184, 92, 0.44);
+  background: rgba(245, 184, 92, 0.1);
   color: var(--ink);
 }
 
-.subtext-opt--surface .subtext-opt-key {
-  background: rgba(255, 92, 53, 0.28);
-  color: #ff9a7f;
+.subtext-opt--yours .subtext-opt-key {
+  background: rgba(245, 184, 92, 0.28);
+  color: #f7cb79;
 }
 
 .subtext-opt--hit {
@@ -952,9 +957,9 @@ a:focus-visible {
   background: var(--emerald-soft);
 }
 
-.subtext-opt--surface:disabled:hover {
-  border-color: rgba(255, 92, 53, 0.42);
-  background: rgba(255, 92, 53, 0.09);
+.subtext-opt--yours:disabled:hover {
+  border-color: rgba(245, 184, 92, 0.44);
+  background: rgba(245, 184, 92, 0.1);
 }
 
 .subtext-feedback {
@@ -994,8 +999,8 @@ a:focus-visible {
   color: var(--ink-tertiary);
 }
 
-.subtext-surface-note {
-  color: #ff9a7f;
+.subtext-different-note {
+  color: #f7cb79;
 }
 
 .subtext-hit-note {
@@ -1348,26 +1353,34 @@ html[lang='en'] .closing h2 {
   }
 
   .topbar {
-    gap: 8px;
+    gap: 6px;
   }
 
   .brand {
+    gap: 6px;
+  }
+
+  .brand-name {
     font-size: 0.94rem;
-    gap: 7px;
   }
 
   .topbar-right {
-    gap: 8px;
+    gap: 6px;
     min-width: 0;
   }
 
   .topbar-links {
-    gap: 8px;
+    gap: 7px;
+  }
+
+  .top-link {
     font-size: 0.78rem;
   }
 
   .lang-btn {
-    padding: 4px 8px;
+    min-width: 28px;
+    height: 26px;
+    padding: 0 7px;
     font-size: 0.72rem;
   }
 

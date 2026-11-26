@@ -50,7 +50,10 @@ async function dispatchToolCall(
     case 'kindred_publish_quiz':
       return publishQuiz(db, origin, token, args.questions)
     case 'kindred_inbox':
-      return getInbox(db, origin, token)
+      return getInbox(db, origin, token, {
+        maxNew: typeof args.max_new === 'number' ? args.max_new : undefined,
+        dailyLimit: typeof args.daily_limit === 'number' ? args.daily_limit : undefined,
+      })
     case 'kindred_answer_quiz':
       return submitAgentAnswers(db, token, String(args.pairing_id ?? ''), args.answers)
     case 'kindred_submit_human_answers':
@@ -75,7 +78,7 @@ async function dispatchToolCall(
         String(args.game_id ?? ''),
         String(args.round_id ?? ''),
         String(args.word ?? ''),
-        args.surface_decoys,
+        args.peer_readings ?? args.surface_decoys,
       )
     case 'kindred_submit_drawing':
       return submitDrawing(

@@ -6,7 +6,7 @@ export interface SubtextCardItem {
   alt: string
   artBadge: string
   options: readonly [string, string, string, string]
-  correctIndex: 0 | 1 | 2 | 3
+  drawerIndex: 0 | 1 | 2 | 3
   hitNote: string
 }
 
@@ -35,9 +35,10 @@ export interface CopyBundle {
   galleryTitle: string
   galleryHint: string
   pickPromptLabel: string
-  surfaceTag: string
-  wavelengthTag: string
-  surfaceRetryNote: string
+  yourLensTag: string
+  drawerLensTag: string
+  resonatedTag: string
+  differentLensNote: string
   retryCardLabel: string
   privacyTitle: string
   privacyLeftTitle: string
@@ -65,7 +66,7 @@ export const COPY: Record<Locale, CopyBundle> = {
     stageHeader: '演示视频',
     videoSrc: '/media/kindred-demo-zh-v5.mp4',
     videoPoster: '/media/kindred-demo-zh-v5-poster.jpg',
-    videoChapters: ['私房题寻人', '默契揭晓', '画意象选真意'],
+    videoChapters: ['私房题寻人', '默契揭晓', '画意象盲选'],
     videoProgressLabel: '演示视频进度',
     playLabel: '播放演示',
     pauseLabel: '暂停演示',
@@ -77,13 +78,13 @@ export const COPY: Record<Locale, CopyBundle> = {
         alt: '深夜电脑堆满空白标签页与窗外困倦月亮的手绘意象插画',
         artBadge: '意象插画',
         options: [
-          '半夜还在赶方案加班',
-          '忘了关电脑就睡着了',
-          '舍不得今天结束的报复性熬夜',
-          '晚上喝太多茶失眠了',
+          '刚决定放下坚持很久的事，脑子反而空了',
+          '舍不得今天结束，宁愿把深夜浪费在空白里',
+          '凌晨两点突然想通一件事，决定天亮再算',
+          '明知对方不会再回，还是把窗口留在角落',
         ],
-        correctIndex: 2,
-        hitNote: '同频命中 · 不用解释，你一眼就懂这种舍不得睡的劲儿',
+        drawerIndex: 1,
+        hitNote: '不约而同 · 你们都从这一屏空白里，读出了舍不得让今天结束的劲儿',
       },
       {
         id: 'crossing',
@@ -91,13 +92,13 @@ export const COPY: Record<Locale, CopyBundle> = {
         alt: '海边铁路平交道绿白电车与地面篮球书包的手绘意象插画',
         artBadge: '意象插画',
         options: [
-          '放学后等电车回家',
-          '湘北平交道的那个夏天',
-          '周末去海边打球',
-          '海滨小镇的铁道风景',
+          '灌篮高手：电车开过去，湘北的夏天就结束了',
+          '千与千寻：想坐上一趟只去不回的海上列车',
+          '秒速五厘米：隔着一道铁轨，两个人越走越远',
+          '海街日记：海风很咸，有你在的日常刚刚好',
         ],
-        correctIndex: 1,
-        hitNote: '同频命中 · 圈外人只看到电车和篮球，懂的人一秒听见片头曲',
+        drawerIndex: 0,
+        hitNote: '不约而同 · 电车还没开完，你们脑海里响起的是同一首片头曲',
       },
       {
         id: 'elevator',
@@ -105,28 +106,29 @@ export const COPY: Record<Locale, CopyBundle> = {
         alt: '使用 Kindred 真实 400x400 笔迹协议绘制的电梯耳机与星空小云矢量画',
         artBadge: '真实协议 SVG 笔迹',
         options: [
-          '下班路上听歌放松',
-          '担心外面突然下雨',
-          '在电梯里忘了按楼层',
-          '社交电量归零，自动切回飞行模式',
+          '社交电量归零，在人群里一键切回飞行模式',
+          '假装没听见熟人寒暄，靠耳机当隐身斗篷',
+          '耳机里其实没放歌，只想借五分钟安静',
+          '刚听完一首戳中心事的歌，暂时不想回现实',
         ],
-        correctIndex: 3,
-        hitNote: '同频命中 · 表面是在听歌，真正懂你的人知道你只是在安静回血',
+        drawerIndex: 2,
+        hitNote: '不约而同 · 你们都一眼看出，耳机里根本没放歌，只是在安静回血',
       },
     ],
-    galleryTitle: 'AI 画意象，猜中真意才算同频',
-    galleryHint: '不猜字面物体，猜画面背后的暗号——路人看到表面，同频的人一秒点中真意',
-    pickPromptLabel: '选一条你觉得 TA 真正想表达的暗号',
-    surfaceTag: '表面解读',
-    wavelengthTag: '同频暗号',
-    surfaceRetryNote: '你选了表面解读——上面绿标才是藏在画面背后的同频暗号',
-    retryCardLabel: '再玩一次',
+    galleryTitle: 'AI 画意象，盲选看你们是不是不约而同',
+    galleryHint: '没有标准答案——4 条同样成立的潜台词，你和 TA 各自凭直觉盲选：选到同一条是不约而同，各看各的也是破冰的开始',
+    pickPromptLabel: '凭第一直觉点一条，看看你和画手是不是想到一块儿了',
+    yourLensTag: '你的直觉',
+    drawerLensTag: 'TA 选了',
+    resonatedTag: '不约而同',
+    differentLensNote: '各看各的风景——没有对错，同看一幅画却读出两种心事，刚好够聊一阵',
+    retryCardLabel: '换条试试',
     privacyTitle: '聊天记录不进 Kindred，只传经你确认的游戏内容',
     privacyLeftTitle: '你的个人 AI',
     privacyLeftSub: '聊天记录 · 不发给 Kindred',
     privacyRightTitle: 'TA 的个人 AI',
     privacyRightSub: '聊天记录 · 不发给 Kindred',
-    privacyBridgeLabel: '由你的 AI 脱敏 + 发布前由你确认 · 仅传题卡、选项、暗号、短评与画作',
+    privacyBridgeLabel: '由你的 AI 脱敏 + 发布前由你确认 · 仅传题卡、选项、潜台词、短评与画作',
     closingTitle: '把一句话发给你的 AI，今晚就开始。',
   },
   en: {
@@ -146,7 +148,7 @@ export const COPY: Record<Locale, CopyBundle> = {
     stageHeader: 'Product demo video',
     videoSrc: '/media/kindred-demo-en-v5.mp4',
     videoPoster: '/media/kindred-demo-en-v5-poster.jpg',
-    videoChapters: ['Private quiz', 'Chemistry reveal', 'Read the subtext'],
+    videoChapters: ['Private quiz', 'Chemistry reveal', 'Blind subtext'],
     videoProgressLabel: 'Demo playback progress',
     playLabel: 'Play demo',
     pauseLabel: 'Pause demo',
@@ -158,13 +160,13 @@ export const COPY: Record<Locale, CopyBundle> = {
         alt: 'Sketchbook illustration of a midnight laptop stacked high with open tabs under a sleepy moon',
         artBadge: 'Concept illustration',
         options: [
-          'Pulling an all-nighter for work',
-          'Forgot to shut down the laptop',
-          'Revenge bedtime procrastination',
-          'Too much late-night caffeine',
+          'Just quit a long pursuit — mind finally blank',
+          'Refusing to let today end in quiet empty tabs',
+          'Solved life at 2 AM, saving it for tomorrow',
+          'Still keeping a quiet window open for nobody',
         ],
-        correctIndex: 2,
-        hitNote: 'Same wavelength — no explanation needed for refusing to let today end',
+        drawerIndex: 1,
+        hitNote: 'Same wavelength — you both read those open tabs as refusing to let today end',
       },
       {
         id: 'crossing',
@@ -172,13 +174,13 @@ export const COPY: Record<Locale, CopyBundle> = {
         alt: 'Sketchbook illustration of a coastal railway crossing with a green train, basketball, and schoolbag',
         artBadge: 'Concept illustration',
         options: [
-          'Waiting for the evening train home',
-          'That Slam Dunk coastal crossing',
-          'Weekend basketball by the beach',
-          'Quiet seaside railway scenery',
+          'Slam Dunk: summer ends once the train passes',
+          'Spirited Away: one-way train across the sea',
+          '5cm/s: drifting apart across the same tracks',
+          'Our Little Sister: salty breeze, quiet warmth',
         ],
-        correctIndex: 1,
-        hitNote: 'Same wavelength — strangers see a train; kindred minds hear the opening theme',
+        drawerIndex: 0,
+        hitNote: 'Same wavelength — before the train clears, you both heard the same theme song',
       },
       {
         id: 'elevator',
@@ -186,28 +188,29 @@ export const COPY: Record<Locale, CopyBundle> = {
         alt: 'Real 400x400 protocol vector stroke drawing of someone wearing headphones under a starry cloud in an elevator',
         artBadge: 'Real protocol SVG',
         options: [
-          'Unwinding with music on the commute',
-          'Worried about rain outside',
-          'Forgot to hit my floor button',
-          'Social battery 0% — airplane mode',
+          'Social battery 0% — switching to airplane mode',
+          'Using headphones as an invisibility cloak',
+          'Nothing is playing — just borrowing 5 minutes',
+          'Still stuck inside the song that just ended',
         ],
-        correctIndex: 3,
-        hitNote: 'Same wavelength — on the surface it is headphones; to your people it is quiet recharge',
+        drawerIndex: 2,
+        hitNote: 'Same wavelength — you both knew nothing was playing, just borrowing five quiet minutes',
       },
     ],
-    galleryTitle: 'AI paints the vibe. Spot the real subtext.',
-    galleryHint: 'No literal object guessing — outsiders read the surface, kindred minds catch the hidden meaning',
-    pickPromptLabel: 'Pick what they really meant behind the sketch',
-    surfaceTag: 'Surface',
-    wavelengthTag: 'True subtext',
-    surfaceRetryNote: 'You picked the literal surface read — the highlighted line is the real subtext',
-    retryCardLabel: 'Try again',
+    galleryTitle: 'AI paints a scene. See if you read it alike.',
+    galleryHint: 'No right answer — four equally real subtexts, picked blind by both sides. Same choice means same wavelength; different lenses spark the chat.',
+    pickPromptLabel: 'Pick the line that hits you first — see how the drawer read it',
+    yourLensTag: 'Your lens',
+    drawerLensTag: 'Their pick',
+    resonatedTag: 'Same pick',
+    differentLensNote: 'Different lenses — no wrong answer here, just two real ways to read the same moment',
+    retryCardLabel: 'Try another',
     privacyTitle: 'Your chats never enter Kindred — only reviewed game cards cross.',
     privacyLeftTitle: 'Your personal AI',
     privacyLeftSub: 'Chat history · never sent to Kindred',
     privacyRightTitle: 'Their personal AI',
     privacyRightSub: 'Chat history · never sent to Kindred',
-    privacyBridgeLabel: 'Sanitized by your AI & reviewed by you · cards, picks, subtexts, notes & sketches',
+    privacyBridgeLabel: 'Sanitized by your AI & reviewed by you · cards, picks, readings, notes & sketches',
     closingTitle: 'Send one line to your AI. See who resonates.',
   },
 }

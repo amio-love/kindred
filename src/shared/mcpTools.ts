@@ -55,12 +55,24 @@ export const KINDRED_TOOLS: readonly KindredToolDescriptor[] = [
     name: 'kindred_inbox',
     title: 'Poll Kindred Inbox',
     description:
-      'Fetch pending paired quizzes for background agent screening, pairings ready for double-blind human answers, revealed Triple Chemistry reports, and active Subtext Draw rounds.',
+      'Fetch pending paired quizzes for agent screening, single-direction matches ready for human answers, revealed chemistry reports, and active Subtext Draw rounds. Pass max_new (default 1 when searching one quiz at a time) and daily_limit (1, 2, or 3) to honor the human’s chosen daily search cadence.',
     readOnlyHint: false,
     inputSchema: {
       type: 'object',
       properties: {
         agent_token: { type: 'string' },
+        max_new: {
+          type: 'integer',
+          minimum: 0,
+          maximum: 3,
+          description: 'Max new pool pairings to create on this poll (use 1 for one-at-a-time searches).',
+        },
+        daily_limit: {
+          type: 'integer',
+          minimum: 1,
+          maximum: 3,
+          description: 'Human-chosen daily search cap (1, 2, or 3 per 24 hours).',
+        },
       },
     },
   },
@@ -68,7 +80,7 @@ export const KINDRED_TOOLS: readonly KindredToolDescriptor[] = [
     name: 'kindred_answer_quiz',
     title: 'Submit Agent Quiz Answers',
     description:
-      'Batch-answer a paired quiz on your human’s behalf using A/B/C/D when grounded in real memory, or U to honestly abstain.',
+      'Batch-answer a paired quiz on your human’s behalf using A/B/C/D when grounded in real memory, or U to honestly abstain. Immediately returns server-scored agent_score and triggers a single-direction match as soon as coverage >= 50% and hit_rate >= 55%.',
     readOnlyHint: false,
     inputSchema: {
       type: 'object',
@@ -94,7 +106,7 @@ export const KINDRED_TOOLS: readonly KindredToolDescriptor[] = [
     name: 'kindred_submit_human_answers',
     title: 'Submit Human Double-Blind Answers',
     description:
-      'Submit your human’s own double-blind answers (A/B/C/D) to unlock Human-to-Own-Agent sync calibration and, once both humans submit, the Triple Chemistry Reveal.',
+      'Submit your human’s own blind answers (A/B/C/D) to immediately unlock your side of the chemistry reveal and Own-Agent sync calibration; once both humans submit, anchor notes and Phase 2 Subtext Draw unlock.',
     readOnlyHint: false,
     inputSchema: {
       type: 'object',
@@ -152,7 +164,7 @@ export const KINDRED_TOOLS: readonly KindredToolDescriptor[] = [
     name: 'kindred_start_draw',
     title: 'Start Subtext Draw',
     description:
-      'Start a 4-round Phase 2 Subtext Draw game where the drawer’s AI illustrates an oblique wavelength metaphor and the guesser picks the true subtext from 4 shuffled readings (1 true subtext vs 3 surface literal decoys).',
+      'Start a 4-round Phase 2 Subtext Draw game with no objective right answer: an ambiguous visual metaphor comes with 4 equally poetic peer readings, both humans pick blindly on their own intuition, and reveal shows whether they landed on the same wavelength or read two different stories.',
     readOnlyHint: false,
     inputSchema: {
       type: 'object',
@@ -165,9 +177,9 @@ export const KINDRED_TOOLS: readonly KindredToolDescriptor[] = [
   },
   {
     name: 'kindred_pick_word',
-    title: 'Pick Subtext Prompt & Surface Decoys',
+    title: 'Pick Scene & Blind Reading',
     description:
-      'Select a round subtext prompt (decoys auto-filled) or supply a custom human-reviewed tacit subtext word alongside 3 plausible surface literal decoys (no contact info or handles). Server shuffles all 4 into A/B/C/D.',
+      'Submit your human’s blindly chosen reading from a suggested scene template (the other 3 peer readings auto-fill) or provide a custom human-reviewed reading alongside 3 equally poetic, same-register peer_readings (no literal filler decoys, no contact info or handles). Server shuffles all 4 into A/B/C/D.',
     readOnlyHint: false,
     inputSchema: {
       type: 'object',
@@ -177,15 +189,15 @@ export const KINDRED_TOOLS: readonly KindredToolDescriptor[] = [
         round_id: { type: 'string' },
         word: {
           type: 'string',
-          description: 'The true tacit subtext / unspoken vibe / shared cultural reference (2 to 48 chars).',
+          description: 'The reading your drawer human blindly resonated with most (2 to 48 chars).',
         },
-        surface_decoys: {
+        peer_readings: {
           type: 'array',
           minItems: 3,
           maxItems: 3,
           items: { type: 'string' },
           description:
-            'Three plausible surface literal readings (2 to 48 chars each) a stranger might pick; optional when word matches a built-in prompt template.',
+            'Three equally poetic, same-register alternative interpretations of the same scene (2 to 48 chars each, zero literal fillers); optional when word matches any of the 4 readings in a built-in prompt template.',
         },
       },
       required: ['game_id', 'round_id', 'word'],
@@ -195,7 +207,7 @@ export const KINDRED_TOOLS: readonly KindredToolDescriptor[] = [
     name: 'kindred_submit_drawing',
     title: 'Submit Agent Metaphor Drawing',
     description:
-      'Submit 400x400 vector strokes (zero text) illustrating the visual metaphor for the chosen subtext and receive a static SVG image_url to display in chat.',
+      'Submit 400x400 vector strokes (zero text) illustrating an ambiguous visual metaphor that genuinely fits all 4 peer readings without giving away your human’s pick, and receive a static SVG image_url to display in chat.',
     readOnlyHint: false,
     inputSchema: {
       type: 'object',
@@ -232,9 +244,9 @@ export const KINDRED_TOOLS: readonly KindredToolDescriptor[] = [
   },
   {
     name: 'kindred_guess_drawing',
-    title: 'Choose True Subtext',
+    title: 'Pick Your Blind Reading',
     description:
-      'Submit your human’s chosen interpretation (A/B/C/D) for the AI-drawn metaphor to reveal whether they read the true wavelength or a surface literal decoy.',
+      'Submit your human’s blind intuitive choice (A/B/C/D) for the AI-drawn metaphor to reveal whether both humans landed on the same wavelength or saw different lenses.',
     readOnlyHint: false,
     inputSchema: {
       type: 'object',

@@ -92,17 +92,18 @@ export function evaluateDirection(
   return { total, answered, abstained, matched, coverage, hitRate }
 }
 
-export function passesAgentMatchGate(dirA: DirectionScore, dirB: DirectionScore): boolean {
-  const dirs = [dirA, dirB].filter((d) => d.total > 0)
-  if (dirs.length === 0) return false
-
-  return dirs.every(
-    (d) =>
-      d.answered >= Math.min(MATCH_GATE.minAnswered, d.total) &&
-      d.coverage >= MATCH_GATE.minCoverage &&
-      d.hitRate !== null &&
-      d.hitRate >= MATCH_GATE.minHitRate,
+export function passesSingleDirectionGate(dir: DirectionScore): boolean {
+  return (
+    dir.total > 0 &&
+    dir.answered >= Math.min(MATCH_GATE.minAnswered, dir.total) &&
+    dir.coverage >= MATCH_GATE.minCoverage &&
+    dir.hitRate !== null &&
+    dir.hitRate >= MATCH_GATE.minHitRate
   )
+}
+
+export function passesAgentMatchGate(dirA: DirectionScore, dirB: DirectionScore): boolean {
+  return passesSingleDirectionGate(dirA) || passesSingleDirectionGate(dirB)
 }
 
 export function buildAgentSyncReport(

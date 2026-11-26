@@ -48,10 +48,10 @@ export default function VisualStory({ copy, copied, onCopy }: VisualStoryProps) 
           {copy.subtextCards.map((card) => {
             const picked = picks[card.id]
             const hasPicked = picked !== undefined
-            const hit = picked === card.correctIndex
+            const resonated = picked === card.drawerIndex
 
             return (
-              <article key={card.id} className={`subtext-card ${hit ? 'subtext-card--hit' : ''}`}>
+              <article key={card.id} className={`subtext-card ${resonated ? 'subtext-card--hit' : ''}`}>
                 <div className="subtext-art-wrap">
                   <img
                     src={card.src}
@@ -67,12 +67,12 @@ export default function VisualStory({ copy, copied, onCopy }: VisualStoryProps) 
                 <div className="subtext-choices" role="group" aria-label={card.alt}>
                   {card.options.map((optText, idx) => {
                     const isPicked = picked === idx
-                    const isCorrect = idx === card.correctIndex
+                    const isDrawerPick = idx === card.drawerIndex
                     const stateClass =
-                      hasPicked && isCorrect
+                      hasPicked && isDrawerPick
                         ? 'subtext-opt--hit'
-                        : isPicked && !isCorrect
-                          ? 'subtext-opt--surface'
+                        : isPicked && !isDrawerPick
+                          ? 'subtext-opt--yours'
                           : hasPicked
                             ? 'subtext-opt--dim'
                             : ''
@@ -95,12 +95,12 @@ export default function VisualStory({ copy, copied, onCopy }: VisualStoryProps) 
                       >
                         <span className="subtext-opt-key">{OPTION_LETTERS[idx]}</span>
                         <span className="subtext-opt-text">{optText}</span>
-                        {isPicked && !isCorrect && (
-                          <span className="subtext-opt-tag">{copy.surfaceTag}</span>
+                        {isPicked && !isDrawerPick && (
+                          <span className="subtext-opt-tag subtext-opt-tag--yours">{copy.yourLensTag}</span>
                         )}
-                        {hasPicked && isCorrect && (
+                        {hasPicked && isDrawerPick && (
                           <span className="subtext-opt-tag subtext-opt-tag--hit">
-                            {copy.wavelengthTag}
+                            {resonated ? copy.resonatedTag : copy.drawerLensTag}
                           </span>
                         )}
                       </button>
@@ -112,8 +112,8 @@ export default function VisualStory({ copy, copied, onCopy }: VisualStoryProps) 
                   {!hasPicked && <span className="subtext-idle">{copy.pickPromptLabel}</span>}
                   {hasPicked && (
                     <div className="subtext-result-row">
-                      <span className={hit ? 'subtext-hit-note' : 'subtext-surface-note'}>
-                        {hit ? card.hitNote : copy.surfaceRetryNote}
+                      <span className={resonated ? 'subtext-hit-note' : 'subtext-different-note'}>
+                        {resonated ? card.hitNote : copy.differentLensNote}
                       </span>
                       <button
                         ref={(el) => {

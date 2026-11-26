@@ -162,7 +162,15 @@ export async function listAnchorNotes(
   }))
 }
 
-export async function ensurePoolPairingsForAgent(db: D1Database, agentId: string): Promise<number> {
+export async function ensurePoolPairingsForAgent(
+  db: D1Database,
+  agentId: string,
+  options?: { maxNew?: number; dailyLimit?: number },
+): Promise<number> {
+  const dailyLimit = Math.min(3, Math.max(1, Math.round(options?.dailyLimit ?? 3)))
+  const maxNew = Math.min(dailyLimit, Math.max(0, Math.round(options?.maxNew ?? dailyLimit)))
+  if (maxNew === 0) return 0
+
   const sinceIso = new Date(Date.now() - 86_400_000).toISOString()
   const { results: recentRows } = await db
     .prepare(
@@ -174,7 +182,7 @@ export async function ensurePoolPairingsForAgent(db: D1Database, agentId: string
     .all<{ cnt: number }>()
 
   const recentCount = Number(recentRows?.[0]?.cnt ?? 0)
-  const remainingSlots = Math.max(0, 3 - recentCount)
+  const remainingSlots = Math.min(maxNew, Math.max(0, dailyLimit - recentCount))
   if (remainingSlots === 0) return 0
 
   const { results: candidates } = await db
@@ -225,9 +233,10 @@ function normalizePromptOptions(rawJson: string, roundNumber: number): SubtextPr
         (item) =>
           item &&
           typeof item === 'object' &&
-          typeof (item as SubtextPromptTemplate).subtext === 'string' &&
-          Array.isArray((item as SubtextPromptTemplate).surfaceDecoys) &&
-          (item as SubtextPromptTemplate).surfaceDecoys.length === 3,
+          typeof (item as SubtextPromptTemplate).visualHint === 'string' &&
+          Array.isArray((item as SubtextPromptTemplate).readings) &&
+          (item as SubtextPromptTemplate).readings.length === 4 &&
+          (item as SubtextPromptTemplate).readings.every((r) => typeof r === 'string'),
       )
     ) {
       return parsed as SubtextPromptTemplate[]
@@ -271,11 +280,14 @@ export function formatDrawRoundView(
     secretWord: canSeeSecret ? row.secret_word : null,
     subtextOptions,
     correctOption: canSeeSecret ? row.correct_option : null,
+    drawerChoice: canSeeSecret ? row.correct_option : null,
     chosenOption: row.status === 'revealed' ? chosenOption : null,
+    partnerChoice: row.status === 'revealed' ? chosenOption : null,
     imageUrl: row.svg_markup ? `${base}/img/${row.id}.svg` : null,
     guessAttempts: row.guess_attempts,
     lastGuess: row.last_guess,
     guessedCorrectly: Boolean(row.guessed_correctly),
+    resonated: Boolean(row.guessed_correctly),
     reaction: row.reaction,
     revealedAt: row.revealed_at,
   }

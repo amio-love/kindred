@@ -17,6 +17,7 @@ import {
   isAnswerChoice,
   isOptionKey,
   passesAgentMatchGate,
+  passesSingleDirectionGate,
   shuffleQuestionOptions,
 } from '../shared/quiz'
 import type { AnswerEntry, ConfidenceLevel, OptionKey, PairingStatus, QuestionOptions } from '../shared/types'
@@ -213,9 +214,51 @@ export async function publishQuiz(
 
   await db.batch(batchStatements)
 
-  const newPairings = await ensurePoolPairingsForAgent(db, agent.id)
+  const newPairings = await ensurePoolPairingsForAgent(db, agent.id, { maxNew: 1, dailyLimit: 3 })
   const base = origin.replace(/\/+$/, '')
   const effectiveToken = mintedToken ?? trimmedToken
+
+  let initialQuiz: {
+    pairing_id: string
+    questions: Array<{
+      id: string
+      position: number
+      dimension: string
+      prompt: string
+      options: QuestionOptions
+      starred: boolean
+    }>
+  } | null = null
+
+  const firstPending = await db
+    .prepare(
+      `SELECT * FROM pairings
+       WHERE status = 'pending_agents'
+         AND ((agent_a_id = ? AND agent_a_submitted_at IS NULL)
+           OR (agent_b_id = ? AND agent_b_submitted_at IS NULL))
+       ORDER BY created_at DESC
+       LIMIT 1`,
+    )
+    .bind(agent.id, agent.id)
+    .first<PairingRow>()
+
+  if (firstPending) {
+    const partnerId = firstPending.agent_a_id === agent.id ? firstPending.agent_b_id : firstPending.agent_a_id
+    const partnerQs = await listQuestions(db, partnerId)
+    if (partnerQs.length > 0) {
+      initialQuiz = {
+        pairing_id: firstPending.id,
+        questions: partnerQs.map((q) => ({
+          id: q.id,
+          position: q.position,
+          dimension: q.dimension,
+          prompt: q.prompt,
+          options: q.options,
+          starred: q.starred,
+        })),
+      }
+    }
+  }
 
   return {
     agent_id: agent.id,
@@ -224,34 +267,42 @@ export async function publishQuiz(
     published_count: questionIds.length,
     shuffled: true,
     new_pairings_created: newPairings,
-    next_step: newPairings > 0
-      ? 'Call kindred_inbox now to fetch paired quizzes and answer them honestly (use U when you lack real memory).'
-      : 'Your quiz is live in the background discovery pool. Poll kindred_inbox periodically to check for newly paired quizzes.',
+    initial_quiz: initialQuiz,
+    next_step: initialQuiz
+      ? 'Immediately answer initial_quiz via kindred_answer_quiz (use U when you lack real memory), show your human the server-returned score right away, and then ask whether they want you to search automatically in the background (1, 2, or 3 times/day).'
+      : 'Your quiz is live in the discovery pool. No other agent quizzes are waiting right now; ask your human whether they want you to check kindred_inbox automatically in the background (1, 2, or 3 times/day).',
   }
 }
 
 async function reconcilePairingStatus(db: D1Database, pairing: PairingRow): Promise<PairingRow> {
-  if (pairing.status === 'pending_agents' && pairing.agent_a_submitted_at && pairing.agent_b_submitted_at) {
+  if (pairing.status === 'pending_agents' && (pairing.agent_a_submitted_at || pairing.agent_b_submitted_at)) {
     const [qsA, qsB, ansA, ansB] = await Promise.all([
-      listQuestions(db, pairing.agent_a_id),
-      listQuestions(db, pairing.agent_b_id),
-      listAnswers(db, pairing.id, pairing.agent_a_id, 'agent'),
-      listAnswers(db, pairing.id, pairing.agent_b_id, 'agent'),
+      pairing.agent_b_submitted_at ? listQuestions(db, pairing.agent_a_id) : Promise.resolve([]),
+      pairing.agent_a_submitted_at ? listQuestions(db, pairing.agent_b_id) : Promise.resolve([]),
+      pairing.agent_a_submitted_at ? listAnswers(db, pairing.id, pairing.agent_a_id, 'agent') : Promise.resolve([]),
+      pairing.agent_b_submitted_at ? listAnswers(db, pairing.id, pairing.agent_b_id, 'agent') : Promise.resolve([]),
     ])
     const dirA = evaluateDirection(qsB, ansA)
     const dirB = evaluateDirection(qsA, ansB)
-    const computedStatus: PairingStatus = passesAgentMatchGate(dirA, dirB) ? 'ready_for_humans' : 'rejected'
-    await db
-      .prepare(
-        `UPDATE pairings
-         SET status = ?
-         WHERE id = ? AND status = 'pending_agents'
-           AND agent_a_submitted_at IS NOT NULL AND agent_b_submitted_at IS NOT NULL`,
-      )
-      .bind(computedStatus, pairing.id)
-      .run()
-    const fresh = await db.prepare('SELECT * FROM pairings WHERE id = ?').bind(pairing.id).first<PairingRow>()
-    if (fresh) return fresh
+    const eitherPassed = passesAgentMatchGate(dirA, dirB)
+    const bothSubmitted = Boolean(pairing.agent_a_submitted_at && pairing.agent_b_submitted_at)
+    const computedStatus: PairingStatus | null = eitherPassed
+      ? 'ready_for_humans'
+      : bothSubmitted
+        ? 'rejected'
+        : null
+    if (computedStatus) {
+      await db
+        .prepare(
+          `UPDATE pairings
+           SET status = ?
+           WHERE id = ? AND status = 'pending_agents'`,
+        )
+        .bind(computedStatus, pairing.id)
+        .run()
+      const fresh = await db.prepare('SELECT * FROM pairings WHERE id = ?').bind(pairing.id).first<PairingRow>()
+      if (fresh) return fresh
+    }
   }
   if (pairing.status === 'ready_for_humans' && pairing.human_a_submitted_at && pairing.human_b_submitted_at) {
     const now = new Date().toISOString()
@@ -270,10 +321,15 @@ async function reconcilePairingStatus(db: D1Database, pairing: PairingRow): Prom
   return pairing
 }
 
-export async function getInbox(db: D1Database, origin: string, token: string | null | undefined) {
+export async function getInbox(
+  db: D1Database,
+  origin: string,
+  token: string | null | undefined,
+  options?: { maxNew?: number; dailyLimit?: number },
+) {
   const agent = await requireAgent(db, token)
   if (agent.quiz_ready) {
-    await ensurePoolPairingsForAgent(db, agent.id)
+    await ensurePoolPairingsForAgent(db, agent.id, options)
   }
 
   const [pendingRes, readyRes, revealedRes] = await Promise.all([
@@ -281,14 +337,15 @@ export async function getInbox(db: D1Database, origin: string, token: string | n
       .prepare(
         `SELECT * FROM pairings
          WHERE status = 'pending_agents'
-           AND (
-             (agent_a_id = ? AND (agent_a_submitted_at IS NULL OR agent_b_submitted_at IS NOT NULL))
-             OR (agent_b_id = ? AND (agent_b_submitted_at IS NULL OR agent_a_submitted_at IS NOT NULL))
-           )
-         ORDER BY created_at DESC
-         LIMIT 12`,
+           AND (agent_a_id = ? OR agent_b_id = ?)
+         ORDER BY CASE
+           WHEN (agent_a_id = ? AND agent_a_submitted_at IS NULL)
+             OR (agent_b_id = ? AND agent_b_submitted_at IS NULL)
+           THEN 0 ELSE 1 END,
+           created_at DESC
+         LIMIT 20`,
       )
-      .bind(agent.id, agent.id)
+      .bind(agent.id, agent.id, agent.id, agent.id)
       .all<PairingRow>(),
     db
       .prepare(
@@ -359,7 +416,7 @@ export async function getInbox(db: D1Database, origin: string, token: string | n
     const humanSubmitted = isA ? Boolean(p.human_a_submitted_at) : Boolean(p.human_b_submitted_at)
     const partnerHumanSubmitted = isA ? Boolean(p.human_b_submitted_at) : Boolean(p.human_a_submitted_at)
 
-    if (p.status === 'pending_agents' && !agentSubmitted) {
+    if (p.status === 'pending_agents' && !agentSubmitted && pendingQuizzes.length < 12) {
       const partnerQs = await listQuestions(db, partnerId)
       if (partnerQs.length > 0) {
         pendingQuizzes.push({
@@ -524,18 +581,30 @@ export async function submitAgentAnswers(
       .bind(now, pairing.id),
   )
 
+  const dirSelf = evaluateDirection(
+    partnerQs,
+    parsedAnswers.map(({ qId, choice }) => ({ questionId: qId, choice: choice as AnswerEntry['choice'] })),
+  )
+  const selfPassed = passesSingleDirectionGate(dirSelf)
+
   const partnerAlreadySubmitted = isA ? Boolean(pairing.agent_b_submitted_at) : Boolean(pairing.agent_a_submitted_at)
-  if (partnerAlreadySubmitted) {
+  if (selfPassed) {
+    batchStatements.push(
+      db
+        .prepare(
+          `UPDATE pairings
+           SET status = 'ready_for_humans'
+           WHERE id = ? AND status = 'pending_agents'`,
+        )
+        .bind(pairing.id),
+    )
+  } else if (partnerAlreadySubmitted) {
     const [selfQs, partnerAgentAnswers] = await Promise.all([
       listQuestions(db, agent.id),
       listAnswers(db, pairing.id, partnerId, 'agent'),
     ])
-    const dirSelf = evaluateDirection(
-      partnerQs,
-      parsedAnswers.map(({ qId, choice }) => ({ questionId: qId, choice: choice as AnswerEntry['choice'] })),
-    )
     const dirPartner = evaluateDirection(selfQs, partnerAgentAnswers)
-    const computedStatus: PairingStatus = passesAgentMatchGate(dirSelf, dirPartner) ? 'ready_for_humans' : 'rejected'
+    const computedStatus: PairingStatus = passesSingleDirectionGate(dirPartner) ? 'ready_for_humans' : 'rejected'
     batchStatements.push(
       db
         .prepare(
@@ -563,12 +632,21 @@ export async function submitAgentAnswers(
     pairing_id: pairing.id,
     saved,
     pairing_status: nextStatus,
+    agent_score: {
+      total: dirSelf.total,
+      answered: dirSelf.answered,
+      abstained: dirSelf.abstained,
+      matched: dirSelf.matched,
+      coverage: dirSelf.coverage,
+      hit_rate: dirSelf.hitRate,
+      passed: selfPassed,
+    },
     next_step:
       nextStatus === 'ready_for_humans'
-        ? 'Passed agent screening! Present the partner questions to your human in chat WITHOUT revealing your agent guesses, then call kindred_submit_human_answers.'
+        ? 'Single-direction match passed! Share this score summary with your human, present the partner questions as interactive cards WITHOUT revealing your agent guesses, then call kindred_submit_human_answers for an immediate reveal.'
         : nextStatus === 'rejected'
-          ? 'Did not pass the paired coverage/hit-rate threshold; silently archived.'
-          : 'Waiting for the paired agent to finish screening.',
+          ? 'Share this score summary with your human; neither side reached the single-direction match threshold so the pairing was archived.'
+          : 'Share this score summary with your human; your side did not reach the single-direction match threshold yet, leaving one chance for the partner agent. Ask whether your human wants scheduled background searches (1, 2, or 3 times/day).',
   }
 }
 
@@ -592,7 +670,7 @@ export async function getPairingReveal(
       status: pairing.status,
       phase: 'pending_agents',
       instruction:
-        'Background agent screening is still in progress. Wait until both agents complete kindred_answer_quiz before presenting questions to your human.',
+        'Single-direction screening has not passed yet. Wait until either agent passes kindred_answer_quiz before presenting questions to your human.',
     }
   }
 
@@ -645,12 +723,36 @@ export async function getPairingReveal(
   const partnerOnSelf = evaluateDirection(selfQs, partnerHuman)
 
   if (pairing.status !== 'revealed') {
+    const selfHumanMap = new Map(selfHuman.map((a) => [a.questionId, a]))
+    const selfAgentMap = new Map(selfAgent.map((a) => [a.questionId, a]))
+    const partialBreakdown = partnerQs.map((q) => ({
+      question_id: q.id,
+      author: 'partner' as const,
+      dimension: q.dimension,
+      prompt: q.prompt,
+      options: q.options,
+      author_choice: q.ownerChoice,
+      respondent_human_choice: selfHumanMap.get(q.id)?.choice ?? null,
+      respondent_agent_choice: selfAgentMap.get(q.id)?.choice ?? null,
+    }))
     return {
       pairing_id: pairing.id,
       status: pairing.status,
-      phase: 'waiting_partner',
+      phase: 'partial_reveal',
       partner_submitted: partnerSubmitted,
+      human_to_human: {
+        self_on_partner: selfOnPartner,
+        partner_on_self: null,
+        combined_hit_rate: selfOnPartner.hitRate,
+      },
       own_agent_sync: ownAgentSync,
+      agent_prediction: {
+        self_agent_on_partner: evaluateDirection(partnerQs, selfAgent).hitRate,
+        partner_agent_on_self: partnerAgent.length > 0 ? evaluateDirection(selfQs, partnerAgent).hitRate : null,
+      },
+      breakdown: partialBreakdown,
+      next_step:
+        'Share this immediate reveal with your human! Anchor notes and Phase 2 Subtext Draw unlock automatically once the partner human submits their answers.',
     }
   }
 
@@ -981,7 +1083,7 @@ export async function pickDrawWord(
   gameId: string,
   roundId: string,
   wordRaw: string,
-  surfaceDecoysRaw?: unknown,
+  peerReadingsRaw?: unknown,
 ) {
   const agent = await requireAgent(db, token)
   const round = await db
@@ -997,46 +1099,46 @@ export async function pickDrawWord(
     throw new ProtocolError(400, `word must be 2 to 48 characters (received ${word.length})`)
   }
 
-  let decoys: [string, string, string] | null = null
-  if (surfaceDecoysRaw !== undefined) {
-    if (!Array.isArray(surfaceDecoysRaw) || surfaceDecoysRaw.length !== 3) {
-      throw new ProtocolError(400, 'surface_decoys must be an array of exactly 3 strings')
+  let peerReadings: [string, string, string] | null = null
+  if (peerReadingsRaw !== undefined) {
+    if (!Array.isArray(peerReadingsRaw) || peerReadingsRaw.length !== 3) {
+      throw new ProtocolError(400, 'peer_readings must be an array of exactly 3 strings')
     }
     const cleaned: string[] = []
     for (let i = 0; i < 3; i++) {
-      const rawItem = surfaceDecoysRaw[i]
+      const rawItem = peerReadingsRaw[i]
       const item = typeof rawItem === 'string' ? rawItem.trim() : ''
       if (item.length < 2 || item.length > 48) {
         throw new ProtocolError(
           400,
-          `surface_decoys[${i}] must be 2 to 48 characters (received ${item.length})`,
+          `peer_readings[${i}] must be 2 to 48 characters (received ${item.length})`,
         )
       }
       cleaned.push(item)
     }
-    decoys = [cleaned[0]!, cleaned[1]!, cleaned[2]!]
+    peerReadings = [cleaned[0]!, cleaned[1]!, cleaned[2]!]
   }
-  if (!decoys) {
+  if (!peerReadings) {
     const matchedTemplate = findSubtextTemplate(word)
     if (matchedTemplate) {
-      decoys = [...matchedTemplate.surfaceDecoys] as [string, string, string]
+      peerReadings = matchedTemplate.peerReadings
     } else {
       throw new ProtocolError(
         400,
-        'Provide 3 surface_decoys (2 to 48 chars each) for a custom subtext prompt, or pick one of promptOptions',
+        'Provide 3 peer_readings (2 to 48 chars each) for a custom scene, or pick any reading from promptOptions',
       )
     }
   }
 
-  const normalizedSet = new Set([word, ...decoys].map(normalizeGuess))
+  const normalizedSet = new Set([word, ...peerReadings].map(normalizeGuess))
   if (normalizedSet.size !== 4) {
     throw new ProtocolError(
       400,
-      'word and all 3 surface_decoys must be distinct after normalization',
+      'word and all 3 peer_readings must be distinct after normalization',
     )
   }
 
-  const shuffled = buildShuffledSubtextOptions(word, decoys)
+  const shuffled = buildShuffledSubtextOptions(word, peerReadings)
 
   const pickRes = await db
     .prepare(
@@ -1055,7 +1157,7 @@ export async function pickDrawWord(
     game_id: gameId,
     round: updated ? formatDrawRoundView(updated, agent.id, origin) : null,
     next_step:
-      'Now draw an evocative visual scene/metaphor for this subtext as 400x400 vector strokes (zero text inside the image) and submit via kindred_submit_drawing.',
+      'Now draw an evocative visual scene/metaphor as 400x400 vector strokes (zero text inside the image) that fits all 4 peer readings without giving away your human’s pick, and submit via kindred_submit_drawing.',
   }
 }
 
@@ -1137,16 +1239,23 @@ export async function guessDrawing(
       .prepare('SELECT * FROM draw_rounds WHERE game_id = ? AND round_number = ?')
       .bind(game.id, revealedRound.round_number + 1)
       .first<DrawRoundRow>()
+    const partnerChoice =
+      revealedRound.last_guess && isOptionKey(revealedRound.last_guess)
+        ? revealedRound.last_guess
+        : null
+    const resonated = Boolean(revealedRound.guessed_correctly)
     return {
-      matched: Boolean(revealedRound.guessed_correctly),
+      matched: resonated,
+      resonated,
       revealed: true,
       attempts_remaining: 0,
       secret_word: revealedRound.secret_word,
+      drawer_choice: revealedRound.correct_option,
+      drawer_reading: revealedRound.secret_word,
       correct_option: revealedRound.correct_option,
-      chosen_option:
-        revealedRound.last_guess && isOptionKey(revealedRound.last_guess)
-          ? revealedRound.last_guess
-          : null,
+      chosen_option: partnerChoice,
+      partner_choice: partnerChoice,
+      partner_reading: partnerChoice && revealedOpts ? revealedOpts[partnerChoice] : null,
       subtext_options: revealedOpts,
       image_url: revealedRound.svg_markup
         ? `${origin.replace(/\/+$/, '')}/img/${revealedRound.id}.svg`
@@ -1233,11 +1342,16 @@ export async function guessDrawing(
     if (afterAttempt.guess_attempts < MAX_GUESS_ATTEMPTS) {
       return {
         matched: false,
+        resonated: false,
         revealed: false,
         attempts_remaining: Math.max(0, MAX_GUESS_ATTEMPTS - afterAttempt.guess_attempts),
         secret_word: null,
+        drawer_choice: null,
+        drawer_reading: null,
         correct_option: null,
         chosen_option: null,
+        partner_choice: null,
+        partner_reading: null,
         subtext_options: subtextOptions,
         image_url: round.svg_markup ? `${origin.replace(/\/+$/, '')}/img/${round.id}.svg` : null,
         game_completed: false,

@@ -86,9 +86,8 @@ export interface Stroke {
 }
 
 export interface SubtextPromptTemplate {
-  subtext: string
   visualHint: string
-  surfaceDecoys: readonly [string, string, string]
+  readings: readonly [string, string, string, string]
 }
 
 export type DrawRoundStatus =
@@ -107,11 +106,14 @@ export interface DrawRoundView {
   secretWord?: string | null
   subtextOptions?: QuestionOptions | null
   correctOption?: OptionKey | null
+  drawerChoice?: OptionKey | null
   chosenOption?: OptionKey | null
+  partnerChoice?: OptionKey | null
   imageUrl?: string | null
   guessAttempts: number
   lastGuess?: string | null
   guessedCorrectly: boolean
+  resonated: boolean
   reaction?: string | null
   revealedAt?: string | null
 }

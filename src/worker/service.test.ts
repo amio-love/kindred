@@ -181,9 +181,10 @@ async function setupPendingPairing(db: D1Database, lang: 'en' | 'zh' = 'en') {
 }
 
 async function setupRevealedPairing(db: D1Database, lang: 'en' | 'zh' = 'en') {
-  const { tokenA, tokenB, pairingId, qsA, qsB, pairA, pairB } = await setupPendingPairing(db, lang)
-  await submitAgentAnswers(db, tokenA, pairingId, mapMatchingAnswers(pairA.questions, qsB))
-  await submitAgentAnswers(db, tokenB, pairingId, mapMatchingAnswers(pairB.questions, qsA))
+  const { tokenA, tokenB, pairingId, qsA, qsB, pairA } = await setupPendingPairing(db, lang)
+  const screenA = await submitAgentAnswers(db, tokenA, pairingId, mapMatchingAnswers(pairA.questions, qsB))
+  assert.equal(screenA.pairing_status, 'ready_for_humans')
+  assert.equal(screenA.agent_score.passed, true)
   const revA = await getPairingReveal(db, ORIGIN, tokenA, pairingId)
   const revB = await getPairingReveal(db, ORIGIN, tokenB, pairingId)
   await submitHumanAnswers(
@@ -284,18 +285,22 @@ describe('Phase 1 quiz publishing, screening gates, and double-blind immutabilit
       /Invalid question_id/i,
     )
 
-    await submitAgentAnswers(
+    const missA = await submitAgentAnswers(
       dbCov,
       covPending.tokenA,
       covPending.pairingId,
       mapMatchingAnswers(covPending.pairA.questions, covPending.qsB).slice(0, 1),
     )
+    assert.equal(missA.agent_score.passed, false)
+    assert.equal(missA.agent_score.matched, 1)
+    assert.equal(missA.pairing_status, 'pending_agents')
     const covRes = await submitAgentAnswers(
       dbCov,
       covPending.tokenB,
       covPending.pairingId,
-      mapMatchingAnswers(covPending.pairB.questions, covPending.qsA),
+      mapMatchingAnswers(covPending.pairB.questions, covPending.qsA, true),
     )
+    assert.equal(covRes.agent_score.passed, false)
     assert.equal(covRes.pairing_status, 'rejected')
     const revRejected = await getPairingReveal(dbCov, ORIGIN, covPending.tokenA, covPending.pairingId)
     assert.equal(revRejected.phase, 'rejected')
@@ -330,7 +335,7 @@ describe('Phase 1 quiz publishing, screening gates, and double-blind immutabilit
 
     interleaveAgent = true
     const agentRace = await Promise.allSettled([
-      submitAgentAnswers(db, pending.tokenA, pending.pairingId, mapMatchingAnswers(pending.pairA.questions, pending.qsB, false)),
+      submitAgentAnswers(db, pending.tokenA, pending.pairingId, mapMatchingAnswers(pending.pairA.questions, pending.qsB, true)),
       submitAgentAnswers(db, pending.tokenA, pending.pairingId, mapMatchingAnswers(pending.pairA.questions, pending.qsB, true)),
     ])
     interleaveAgent = false
@@ -338,6 +343,7 @@ describe('Phase 1 quiz publishing, screening gates, and double-blind immutabilit
     assert.equal(agentRace.filter((r) => r.status === 'rejected').length, 1)
 
     const screenB = await submitAgentAnswers(db, pending.tokenB, pending.pairingId, mapMatchingAnswers(pending.pairB.questions, pending.qsA))
+    assert.equal(screenB.agent_score.passed, true)
     assert.equal(screenB.pairing_status, 'ready_for_humans')
 
     const readyInboxA = await getInbox(db, ORIGIN, pending.tokenA)
@@ -430,15 +436,18 @@ describe('Phase 1 quiz publishing, screening gates, and double-blind immutabilit
     assert.equal(humanRace.filter((r) => r.status === 'fulfilled').length, 1)
     assert.equal(humanRace.filter((r) => r.status === 'rejected').length, 1)
 
-    const waiting = await getPairingReveal(db, ORIGIN, pending.tokenA, pending.pairingId)
-    assert.equal(waiting.phase, 'waiting_partner')
-    assert.deepEqual(Object.keys(waiting).sort(), [
-      'own_agent_sync',
-      'pairing_id',
-      'partner_submitted',
-      'phase',
-      'status',
-    ])
+    const partial = (await getPairingReveal(db, ORIGIN, pending.tokenA, pending.pairingId)) as {
+      phase: string
+      partner_submitted: boolean
+      human_to_human: { self_on_partner: { answered: number }; partner_on_self: null }
+      breakdown: Array<{ author: string; author_choice: string }>
+    }
+    assert.equal(partial.phase, 'partial_reveal')
+    assert.equal(partial.partner_submitted, false)
+    assert.equal(partial.human_to_human.self_on_partner.answered, 4)
+    assert.equal(partial.human_to_human.partner_on_self, null)
+    assert.equal(partial.breakdown.length, 4)
+    assert.ok(partial.breakdown.every((item) => item.author === 'partner' && Boolean(item.author_choice)))
 
     const blindB = (await getPairingReveal(db, ORIGIN, pending.tokenB, pending.pairingId)) as {
       partner_questions: typeof pending.pairB.questions
@@ -470,7 +479,6 @@ describe('Phase 1 quiz publishing, screening gates, and double-blind immutabilit
     })
     const pending = await setupPendingPairing(db)
     await submitAgentAnswers(db, pending.tokenA, pending.pairingId, mapMatchingAnswers(pending.pairA.questions, pending.qsB))
-    await submitAgentAnswers(db, pending.tokenB, pending.pairingId, mapMatchingAnswers(pending.pairB.questions, pending.qsA))
 
     const blindA = (await getPairingReveal(db, ORIGIN, pending.tokenA, pending.pairingId)) as {
       partner_questions: typeof pending.pairA.questions
@@ -519,7 +527,6 @@ describe('Phase 1 quiz publishing, screening gates, and double-blind immutabilit
     const dbAgentHeal = createSqliteD1()
     const p2 = await setupPendingPairing(dbAgentHeal)
     await submitAgentAnswers(dbAgentHeal, p2.tokenA, p2.pairingId, mapMatchingAnswers(p2.pairA.questions, p2.qsB))
-    await submitAgentAnswers(dbAgentHeal, p2.tokenB, p2.pairingId, mapMatchingAnswers(p2.pairB.questions, p2.qsA))
     await dbAgentHeal
       .prepare(`UPDATE pairings SET status = 'pending_agents' WHERE id = ?`)
       .bind(p2.pairingId)
@@ -848,24 +855,27 @@ describe('Subtext Draw protocol invariants', () => {
     )
   })
 
-  test('enforces drawer/guesser role auth, hides secrets and promptOptions from guesser, scores wrong picks false, and localizes give_up', async () => {
+  test('enforces drawer/guesser role auth, hides secrets and promptOptions from guesser, scores different lenses cleanly, and localizes give_up', async () => {
     const db = createSqliteD1()
     const { tokenA, tokenB, gameId, roundId } = await setupDrawGame(db, 'zh')
+    const midnightReading = COPY.zh.subtextCards[0].options[1]
+    const crossingReading = COPY.zh.subtextCards[1].options[2]
 
     const guesserInboxPicking = await getInbox(db, ORIGIN, tokenB)
     assert.equal(guesserInboxPicking.active_draw_turns[0]?.round.promptOptions, undefined)
 
     await assert.rejects(
-      () => pickDrawWord(db, ORIGIN, tokenB, gameId, roundId, '舍不得今天结束的报复性熬夜'),
+      () => pickDrawWord(db, ORIGIN, tokenB, gameId, roundId, midnightReading),
       /Only the drawer/i,
     )
 
-    const picked = await pickDrawWord(db, ORIGIN, tokenA, gameId, roundId, '舍不得今天结束的报复性熬夜')
+    const picked = await pickDrawWord(db, ORIGIN, tokenA, gameId, roundId, midnightReading)
     const inboxBeforeDraw = await getInbox(db, ORIGIN, tokenB)
     const rBefore = inboxBeforeDraw.active_draw_turns[0]?.round
     assert.equal(rBefore?.subtextOptions, null)
     assert.equal(rBefore?.secretWord, null)
     assert.equal(rBefore?.correctOption, null)
+    assert.equal(rBefore?.drawerChoice, null)
     assert.equal(rBefore?.promptOptions, undefined)
 
     await assert.rejects(
@@ -879,36 +889,44 @@ describe('Subtext Draw protocol invariants', () => {
     assert.ok(rAfter?.subtextOptions)
     assert.equal(rAfter?.secretWord, null)
     assert.equal(rAfter?.correctOption, null)
+    assert.equal(rAfter?.drawerChoice, null)
 
-    const correctKey = picked.round!.correctOption!
-    const wrongKey = (['A', 'B', 'C', 'D'] as const).find((k) => k !== correctKey)!
+    const drawerKey = picked.round!.drawerChoice!
+    const otherKey = (['A', 'B', 'C', 'D'] as const).find((k) => k !== drawerKey)!
 
     await assert.rejects(
-      () => guessDrawing(db, ORIGIN, tokenA, gameId, roundId, '', false, undefined, correctKey),
+      () => guessDrawing(db, ORIGIN, tokenA, gameId, roundId, '', false, undefined, drawerKey),
       /Only the guesser/i,
     )
     await assert.rejects(
-      () => guessDrawing(db, ORIGIN, tokenB, gameId, roundId, '', false, 'a'.repeat(25), correctKey),
+      () => guessDrawing(db, ORIGIN, tokenB, gameId, roundId, '', false, 'a'.repeat(25), drawerKey),
       /at most 24 characters/i,
     )
 
-    const wrongReveal = await guessDrawing(db, ORIGIN, tokenB, gameId, roundId, '', false, '猜偏了', wrongKey)
-    assert.equal(wrongReveal.matched, false)
-    assert.equal(wrongReveal.revealed, true)
-    assert.equal(wrongReveal.chosen_option, wrongKey)
-    assert.equal(wrongReveal.correct_option, correctKey)
-    assert.equal(wrongReveal.secret_word, '舍不得今天结束的报复性熬夜')
+    const diffReveal = await guessDrawing(db, ORIGIN, tokenB, gameId, roundId, '', false, '各看各的风景', otherKey)
+    assert.equal(diffReveal.matched, false)
+    assert.equal(diffReveal.resonated, false)
+    assert.equal(diffReveal.revealed, true)
+    assert.equal(diffReveal.chosen_option, otherKey)
+    assert.equal(diffReveal.partner_choice, otherKey)
+    assert.equal(diffReveal.partner_reading, picked.round!.subtextOptions![otherKey])
+    assert.equal(diffReveal.correct_option, drawerKey)
+    assert.equal(diffReveal.drawer_choice, drawerKey)
+    assert.equal(diffReveal.drawer_reading, midnightReading)
+    assert.equal(diffReveal.secret_word, midnightReading)
 
-    const retryReveal = await guessDrawing(db, ORIGIN, tokenB, gameId, roundId, '', false, '猜偏了', correctKey)
+    const retryReveal = await guessDrawing(db, ORIGIN, tokenB, gameId, roundId, '', false, '各看各的风景', drawerKey)
     assert.equal(retryReveal.matched, false)
-    assert.equal(retryReveal.chosen_option, wrongKey)
-    assert.equal(retryReveal.next_round?.id, wrongReveal.next_round?.id)
+    assert.equal(retryReveal.resonated, false)
+    assert.equal(retryReveal.chosen_option, otherKey)
+    assert.equal(retryReveal.next_round?.id, diffReveal.next_round?.id)
 
-    const round2Id = wrongReveal.next_round!.id
-    await pickDrawWord(db, ORIGIN, tokenB, gameId, round2Id, '湘北平交道的那个夏天')
+    const round2Id = diffReveal.next_round!.id
+    await pickDrawWord(db, ORIGIN, tokenB, gameId, round2Id, crossingReading)
     await submitDrawing(db, ORIGIN, tokenB, gameId, round2Id, VALID_STROKES)
     const skipped = await guessDrawing(db, ORIGIN, tokenA, gameId, round2Id, '跳过', true)
     assert.equal(skipped.matched, false)
+    assert.equal(skipped.resonated, false)
     assert.equal(skipped.revealed, true)
     const storedR2 = await db
       .prepare('SELECT last_guess FROM draw_rounds WHERE id = ?')
@@ -923,15 +941,18 @@ describe('Subtext Draw protocol invariants', () => {
     const enPrompts = enGame.round1.promptOptions ?? []
     assert.equal(enPrompts.length, 3)
     for (const p of enPrompts) {
-      assert.equal(/[\u4e00-\u9fff]/.test(p.subtext), false, `Expected English subtext, got ${p.subtext}`)
-      assert.equal(p.surfaceDecoys.length, 3)
+      assert.equal(p.readings.length, 4)
+      for (const reading of p.readings) {
+        assert.equal(/[\u4e00-\u9fff]/.test(reading), false, `Expected English reading, got ${reading}`)
+      }
     }
 
-    const pickedEn = await pickDrawWord(dbEn, ORIGIN, enGame.tokenA, enGame.gameId, enGame.roundId, enPrompts[0]!.subtext)
+    const pickedEn = await pickDrawWord(dbEn, ORIGIN, enGame.tokenA, enGame.gameId, enGame.roundId, enPrompts[0]!.readings[2])
     assert.ok(pickedEn.round?.subtextOptions)
     await submitDrawing(dbEn, ORIGIN, enGame.tokenA, enGame.gameId, enGame.roundId, VALID_STROKES)
     const skippedEn = await guessDrawing(dbEn, ORIGIN, enGame.tokenB, enGame.gameId, enGame.roundId, '', true)
     assert.equal(skippedEn.matched, false)
+    assert.equal(skippedEn.resonated, false)
     assert.equal(skippedEn.revealed, true)
     const storedEn = await dbEn
       .prepare('SELECT last_guess FROM draw_rounds WHERE id = ?')
@@ -942,7 +963,10 @@ describe('Subtext Draw protocol invariants', () => {
     const round2Prompts = skippedEn.next_round?.promptOptions ?? []
     assert.equal(round2Prompts.length, 3)
     for (const p of round2Prompts) {
-      assert.equal(/[\u4e00-\u9fff]/.test(p.subtext), false, `Expected English Round 2 subtext, got ${p.subtext}`)
+      assert.equal(p.readings.length, 4)
+      for (const reading of p.readings) {
+        assert.equal(/[\u4e00-\u9fff]/.test(reading), false, `Expected English Round 2 reading, got ${reading}`)
+      }
     }
 
     const round2EnId = skippedEn.next_round!.id
@@ -967,28 +991,30 @@ describe('Subtext Draw protocol invariants', () => {
     const zhGame = await setupDrawGame(dbZh, 'zh')
     const zhPrompts = zhGame.round1.promptOptions ?? []
     assert.equal(zhPrompts.length, 3)
-    assert.equal(/[\u4e00-\u9fff]/.test(zhPrompts[0]!.subtext), true)
+    assert.equal(zhPrompts[0]!.readings.length, 4)
+    assert.equal(/[\u4e00-\u9fff]/.test(zhPrompts[0]!.readings[0]), true)
   })
 
   test('rolls back round reveal atomically when next-round INSERT fails inside batch', async () => {
     let failInsert = false
     const db = createSqliteD1({ shouldFailSql: (sql) => failInsert && /INSERT INTO draw_rounds/i.test(sql) })
     const { tokenA, tokenB, gameId, roundId } = await setupDrawGame(db, 'zh')
-    const picked = await pickDrawWord(db, ORIGIN, tokenA, gameId, roundId, '湘北平交道的那个夏天')
+    const picked = await pickDrawWord(db, ORIGIN, tokenA, gameId, roundId, COPY.zh.subtextCards[1].options[0])
     await submitDrawing(db, ORIGIN, tokenA, gameId, roundId, VALID_STROKES)
 
     failInsert = true
-    const correctKey = picked.round!.correctOption!
+    const drawerKey = picked.round!.drawerChoice!
     await assert.rejects(() =>
-      guessDrawing(db, ORIGIN, tokenB, gameId, roundId, '', false, undefined, correctKey),
+      guessDrawing(db, ORIGIN, tokenB, gameId, roundId, '', false, undefined, drawerKey),
     )
 
     const inboxAfterFailure = await getInbox(db, ORIGIN, tokenB)
     assert.equal(inboxAfterFailure.active_draw_turns[0]?.round.status, 'awaiting_guess')
 
     failInsert = false
-    const recovered = await guessDrawing(db, ORIGIN, tokenB, gameId, roundId, '', false, undefined, correctKey)
+    const recovered = await guessDrawing(db, ORIGIN, tokenB, gameId, roundId, '', false, undefined, drawerKey)
     assert.equal(recovered.matched, true)
+    assert.equal(recovered.resonated, true)
     assert.equal(recovered.revealed, true)
     assert.equal(recovered.next_round?.roundNumber, 2)
   })
@@ -1004,17 +1030,17 @@ describe('Subtext Draw protocol invariants', () => {
       },
     })
     const { tokenA, tokenB, gameId, roundId } = await setupDrawGame(db, 'zh')
-    const picked = await pickDrawWord(db, ORIGIN, tokenA, gameId, roundId, '舍不得今天结束的报复性熬夜')
+    const picked = await pickDrawWord(db, ORIGIN, tokenA, gameId, roundId, COPY.zh.subtextCards[0].options[1])
     await submitDrawing(db, ORIGIN, tokenA, gameId, roundId, VALID_STROKES)
     await db.prepare('UPDATE draw_games SET total_rounds = 1 WHERE id = ?').bind(gameId).run()
 
-    const correctKey = picked.round!.correctOption!
-    const wrongKey = (['A', 'B', 'C', 'D'] as const).find((k) => k !== correctKey)!
+    const drawerKey = picked.round!.drawerChoice!
+    const otherKey = (['A', 'B', 'C', 'D'] as const).find((k) => k !== drawerKey)!
 
     interleave = true
     const [first, second] = await Promise.all([
-      guessDrawing(db, ORIGIN, tokenB, gameId, roundId, '', false, undefined, correctKey),
-      guessDrawing(db, ORIGIN, tokenB, gameId, roundId, '', false, undefined, wrongKey),
+      guessDrawing(db, ORIGIN, tokenB, gameId, roundId, '', false, undefined, drawerKey),
+      guessDrawing(db, ORIGIN, tokenB, gameId, roundId, '', false, undefined, otherKey),
     ])
     interleave = false
 
@@ -1022,8 +1048,10 @@ describe('Subtext Draw protocol invariants', () => {
     assert.equal(second.revealed, true)
     assert.equal(first.matched, true)
     assert.equal(second.matched, true)
-    assert.equal(first.chosen_option, correctKey)
-    assert.equal(second.chosen_option, correctKey)
+    assert.equal(first.resonated, true)
+    assert.equal(second.resonated, true)
+    assert.equal(first.chosen_option, drawerKey)
+    assert.equal(second.chosen_option, drawerKey)
   })
 
   test('CAS interleaving: late submitDrawing that passed pre-check cannot reopen a revealed round', async () => {
@@ -1047,7 +1075,7 @@ describe('Subtext Draw protocol invariants', () => {
       },
     })
     const { tokenA, tokenB, gameId, roundId } = await setupDrawGame(db, 'zh')
-    const picked = await pickDrawWord(db, ORIGIN, tokenA, gameId, roundId, '舍不得今天结束的报复性熬夜')
+    const picked = await pickDrawWord(db, ORIGIN, tokenA, gameId, roundId, COPY.zh.subtextCards[0].options[1])
     await submitDrawing(db, ORIGIN, tokenA, gameId, roundId, VALID_STROKES)
 
     pauseSubmit = true
@@ -1063,7 +1091,7 @@ describe('Subtext Draw protocol invariants', () => {
       '',
       false,
       undefined,
-      picked.round!.correctOption!,
+      picked.round!.drawerChoice!,
     )
     assert.equal(revealed.revealed, true)
 
@@ -1091,8 +1119,8 @@ describe('Subtext Draw protocol invariants', () => {
 
     interleave = true
     const results = await Promise.allSettled([
-      pickDrawWord(db, ORIGIN, tokenA, gameId, roundId, '舍不得今天结束的报复性熬夜'),
-      pickDrawWord(db, ORIGIN, tokenA, gameId, roundId, '湘北平交道的那个夏天'),
+      pickDrawWord(db, ORIGIN, tokenA, gameId, roundId, COPY.zh.subtextCards[0].options[1]),
+      pickDrawWord(db, ORIGIN, tokenA, gameId, roundId, COPY.zh.subtextCards[1].options[0]),
     ])
     interleave = false
 
@@ -1166,8 +1194,22 @@ describe('Subtext Draw protocol invariants', () => {
     const inbox = await getInbox(db, ORIGIN, tokenA)
     const prompts = inbox.active_draw_turns[0]?.round.promptOptions
     assert.ok(Array.isArray(prompts) && prompts.length === 3)
-    assert.equal(typeof prompts[0]?.subtext, 'string')
-    assert.equal(prompts[0]?.surfaceDecoys.length, 3)
+    assert.equal(typeof prompts[0]?.visualHint, 'string')
+    assert.equal(prompts[0]?.readings.length, 4)
+
+    await db
+      .prepare('UPDATE draw_rounds SET prompt_options_json = ? WHERE id = ?')
+      .bind(
+        JSON.stringify([
+          { subtext: 'old', visualHint: 'old', surfaceDecoys: ['a', 'b', 'c'] },
+        ]),
+        roundId,
+      )
+      .run()
+    const inboxFromV1 = await getInbox(db, ORIGIN, tokenA)
+    const promptsFromV1 = inboxFromV1.active_draw_turns[0]?.round.promptOptions
+    assert.ok(Array.isArray(promptsFromV1) && promptsFromV1.length === 3)
+    assert.equal(promptsFromV1[0]?.readings.length, 4)
 
     await db
       .prepare(
@@ -1233,10 +1275,19 @@ describe('Subtext Draw protocol invariants', () => {
       for (const card of COPY[locale].subtextCards) {
         const db = createSqliteD1()
         const { tokenA, gameId, roundId } = await setupDrawGame(db, locale)
-        const trueSubtext = card.options[card.correctIndex]
-        const decoys = card.options.filter((_, idx) => idx !== card.correctIndex)
-        const res = await pickDrawWord(db, ORIGIN, tokenA, gameId, roundId, trueSubtext, decoys)
-        assert.ok(res.round?.subtextOptions)
+        const drawerReading = card.options[card.drawerIndex]
+        const resAuto = await pickDrawWord(db, ORIGIN, tokenA, gameId, roundId, drawerReading)
+        assert.ok(resAuto.round?.subtextOptions)
+        assert.equal(new Set(Object.values(resAuto.round!.subtextOptions!)).size, 4)
+        for (const opt of card.options) {
+          assert.ok(Object.values(resAuto.round!.subtextOptions!).includes(opt))
+        }
+
+        const dbExplicit = createSqliteD1()
+        const g2 = await setupDrawGame(dbExplicit, locale)
+        const peerReadings = card.options.filter((_, idx) => idx !== card.drawerIndex)
+        const resExplicit = await pickDrawWord(dbExplicit, ORIGIN, g2.tokenA, g2.gameId, g2.roundId, drawerReading, peerReadings)
+        assert.ok(resExplicit.round?.subtextOptions)
       }
     }
   })

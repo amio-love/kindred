@@ -50,8 +50,14 @@ export function createProtocolRoutes() {
 
   app.get('/inbox', async (c) => {
     try {
-      const origin = new URL(c.req.url).origin
-      const res = await getInbox(c.env.DB, origin, resolveToken(c))
+      const url = new URL(c.req.url)
+      const origin = url.origin
+      const rawMaxNew = url.searchParams.get('max_new')
+      const rawDailyLimit = url.searchParams.get('daily_limit')
+      const maxNew = rawMaxNew !== null && Number.isFinite(Number(rawMaxNew)) ? Number(rawMaxNew) : undefined
+      const dailyLimit =
+        rawDailyLimit !== null && Number.isFinite(Number(rawDailyLimit)) ? Number(rawDailyLimit) : undefined
+      const res = await getInbox(c.env.DB, origin, resolveToken(c), { maxNew, dailyLimit })
       return c.json(res)
     } catch (err) {
       return handleError(c, err)
@@ -127,7 +133,7 @@ export function createProtocolRoutes() {
         c.req.param('gameId'),
         c.req.param('roundId'),
         String(body?.word ?? ''),
-        body?.surface_decoys,
+        body?.peer_readings ?? body?.surface_decoys,
       )
       return c.json(res)
     } catch (err) {
