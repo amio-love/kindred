@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite'
 import { describe, test } from 'node:test'
 import { fileURLToPath } from 'node:url'
+import { sha256Base64Url } from './env'
 import app from './index'
 
 function createMemD1(): D1Database {
@@ -76,12 +77,205 @@ function makeEnv() {
   }
 }
 
-describe('Streamable HTTP MCP, CORS, and route boundary compliance', () => {
-  test('GET /mcp returns 405 with Allow header and OPTIONS /mcp allows Mcp-Protocol-Version for browser SDKs', async () => {
+function sampleQuestions(prefix: string) {
+  return [1, 2, 3].map((i) => ({
+    dimension: 'Taste',
+    prompt: `${prefix} evening habit question ${i}?`,
+    options: { A: `${prefix}-a-${i}`, B: `${prefix}-b-${i}`, C: `${prefix}-c-${i}`, D: `${prefix}-d-${i}` },
+    owner_choice: 'A',
+  }))
+}
+
+async function runAnonymousOAuthFlow(
+  env: ReturnType<typeof makeEnv>,
+  options?: {
+    redirectUri?: string
+    authMethod?: 'none' | 'client_secret_basic' | 'client_secret_post'
+    grantTypes?: string[]
+    resource?: string
+    omitRedirectUriOnAuthorize?: boolean
+    omitRedirectUriOnToken?: boolean
+  },
+) {
+  const redirectUri = options?.redirectUri ?? 'https://agent.meta.ai/api/hatch/oauth/callback'
+  const authMethod = options?.authMethod ?? 'none'
+  const grantTypes = options?.grantTypes ?? ['authorization_code', 'refresh_token']
+  const regRes = await app.request(
+    'https://kindred.example.test/oauth/register',
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        client_name: 'Meta Muse',
+        redirect_uris: [redirectUri],
+        token_endpoint_auth_method: authMethod,
+        grant_types: grantTypes,
+      }),
+    },
+    env,
+  )
+  assert.equal(regRes.status, 201)
+  const client = (await regRes.json()) as {
+    client_id: string
+    client_secret?: string
+    token_endpoint_auth_method: string
+  }
+
+  const codeVerifier = 'dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk'
+  const codeChallenge = await sha256Base64Url(codeVerifier)
+  assert.equal(codeChallenge, 'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM')
+  const authorizeUrl = new URL('https://kindred.example.test/oauth/authorize')
+  authorizeUrl.searchParams.set('response_type', 'code')
+  authorizeUrl.searchParams.set('client_id', client.client_id)
+  if (!options?.omitRedirectUriOnAuthorize) {
+    authorizeUrl.searchParams.set('redirect_uri', redirectUri)
+  }
+  authorizeUrl.searchParams.set('code_challenge', codeChallenge)
+  authorizeUrl.searchParams.set('code_challenge_method', 'S256')
+  authorizeUrl.searchParams.set('scope', 'kindred')
+  authorizeUrl.searchParams.set('state', 'st_xyz_123')
+  if (options?.resource) {
+    authorizeUrl.searchParams.set('resource', options.resource)
+  }
+
+  const consentRes = await app.request(authorizeUrl.toString(), { method: 'GET' }, env)
+  assert.equal(consentRes.status, 200)
+  assert.equal(consentRes.headers.get('X-Frame-Options'), 'DENY')
+  assert.equal(consentRes.headers.get('Access-Control-Allow-Origin'), null)
+  const csp = consentRes.headers.get('Content-Security-Policy') ?? ''
+  assert.match(csp, /frame-ancestors 'none'/)
+  assert.ok(csp.includes(`form-action 'self' ${new URL(redirectUri).origin}`), `Unexpected CSP: ${csp}`)
+  const setCookie = consentRes.headers.get('Set-Cookie') ?? ''
+  const cookiePair = setCookie.split(';')[0] ?? ''
+  assert.ok(cookiePair.startsWith('kindred_oauth_csrf='))
+  const html = await consentRes.text()
+  const reqIdMatch = /name="request_id" value="([^"]+)"/.exec(html)
+  const csrfMatch = /name="csrf_token" value="([^"]+)"/.exec(html)
+  assert.ok(reqIdMatch?.[1])
+  assert.ok(csrfMatch?.[1])
+
+  const approveForm = new URLSearchParams({
+    request_id: reqIdMatch[1],
+    csrf_token: csrfMatch[1],
+    decision: 'approve',
+  })
+  const approveRes = await app.request(
+    'https://kindred.example.test/oauth/authorize',
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        Cookie: cookiePair,
+      },
+      body: approveForm.toString(),
+    },
+    env,
+  )
+  assert.equal(approveRes.status, 302)
+  const location = new URL(approveRes.headers.get('Location') ?? '')
+  assert.equal(location.origin + location.pathname, redirectUri)
+  assert.equal(location.searchParams.get('state'), 'st_xyz_123')
+  assert.equal(location.searchParams.get('iss'), 'https://kindred.example.test')
+  const code = location.searchParams.get('code')
+  assert.ok(code)
+
+  const tokenForm = new URLSearchParams({
+    grant_type: 'authorization_code',
+    code,
+    code_verifier: codeVerifier,
+  })
+  if (!options?.omitRedirectUriOnToken) {
+    tokenForm.set('redirect_uri', redirectUri)
+  }
+  const tokenHeaders: Record<string, string> = {
+    'Content-Type': 'application/x-www-form-urlencoded',
+  }
+  if (authMethod === 'client_secret_basic' && client.client_secret) {
+    tokenHeaders.Authorization = `Basic ${btoa(`${encodeURIComponent(client.client_id)}:${encodeURIComponent(client.client_secret)}`)}`
+  } else {
+    tokenForm.set('client_id', client.client_id)
+    if (authMethod === 'client_secret_post' && client.client_secret) {
+      tokenForm.set('client_secret', client.client_secret)
+    }
+  }
+  if (options?.resource) {
+    tokenForm.set('resource', options.resource)
+  }
+
+  const tokenRes = await app.request(
+    'https://kindred.example.test/oauth/token',
+    {
+      method: 'POST',
+      headers: tokenHeaders,
+      body: tokenForm.toString(),
+    },
+    env,
+  )
+  assert.equal(tokenRes.status, 200)
+  assert.equal(tokenRes.headers.get('Cache-Control'), 'no-store')
+  const tokenBody = (await tokenRes.json()) as {
+    access_token: string
+    refresh_token?: string
+    token_type: string
+    expires_in: number
+    scope: string
+  }
+  assert.equal(tokenBody.token_type, 'Bearer')
+  assert.equal(tokenBody.scope, 'kindred')
+  assert.ok(tokenBody.access_token.startsWith('knd_'))
+  if (grantTypes.includes('refresh_token')) {
+    assert.ok(tokenBody.refresh_token?.startsWith('kndr_'))
+  } else {
+    assert.equal(tokenBody.refresh_token, undefined)
+  }
+
+  return {
+    client,
+    code,
+    codeVerifier,
+    redirectUri,
+    requestId: reqIdMatch[1],
+    csrfToken: csrfMatch[1],
+    cookiePair,
+    ...tokenBody,
+  }
+}
+
+describe('Streamable HTTP MCP, anonymous OAuth 2.1, CORS, and route boundary compliance', () => {
+  test('unauthenticated /mcp returns 401 WWW-Authenticate OAuth challenge and CORS exposes WWW-Authenticate', async () => {
     const env = makeEnv()
-    const getRes = await app.request('https://kindred.example.test/mcp', { method: 'GET' }, env)
-    assert.equal(getRes.status, 405)
-    assert.equal(getRes.headers.get('Allow'), 'POST, OPTIONS')
+
+    const unauthPost = await app.request(
+      'https://kindred.example.test/mcp',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} }),
+      },
+      env,
+    )
+    assert.equal(unauthPost.status, 401)
+    assert.equal(unauthPost.headers.get('Cache-Control'), 'no-store')
+    assert.match(
+      unauthPost.headers.get('WWW-Authenticate') ?? '',
+      /Bearer resource_metadata="https:\/\/kindred\.example\.test\/\.well-known\/oauth-protected-resource"/,
+    )
+
+    const unauthGet = await app.request('https://kindred.example.test/mcp', { method: 'GET' }, env)
+    assert.equal(unauthGet.status, 401)
+    assert.match(unauthGet.headers.get('WWW-Authenticate') ?? '', /oauth-protected-resource/)
+
+    const badTokenPost = await app.request(
+      'https://kindred.example.test/mcp',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer knd_bogus_token' },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' }),
+      },
+      env,
+    )
+    assert.equal(badTokenPost.status, 401)
+    assert.match(badTokenPost.headers.get('WWW-Authenticate') ?? '', /error="invalid_token"/)
 
     const preflight = await app.request(
       'https://kindred.example.test/mcp',
@@ -90,36 +284,73 @@ describe('Streamable HTTP MCP, CORS, and route boundary compliance', () => {
         headers: {
           Origin: 'https://client.example.org',
           'Access-Control-Request-Method': 'POST',
-          'Access-Control-Request-Headers': 'content-type, mcp-protocol-version',
+          'Access-Control-Request-Headers': 'content-type, authorization, mcp-protocol-version',
         },
       },
       env,
     )
     assert.equal(preflight.status, 204)
     assert.match(preflight.headers.get('Access-Control-Allow-Headers') ?? '', /Mcp-Protocol-Version/i)
+    assert.match(preflight.headers.get('Access-Control-Expose-Headers') ?? '', /WWW-Authenticate/i)
   })
 
-  test('POST /mcp returns -32700 on invalid JSON, handles notifications (202), JSON-RPC batches, tools/list, and tools/call dispatch', async () => {
+  test('anonymous OAuth 2.1 DCR + PKCE S256 provisions persistent MCP identity, supports refresh rotation, replay revocation, and erase cascade', async () => {
     const env = makeEnv()
+
+    for (const path of ['/.well-known/oauth-protected-resource', '/.well-known/oauth-protected-resource/mcp']) {
+      const prmRes = await app.request(`https://kindred.example.test${path}`, { method: 'GET' }, env)
+      assert.equal(prmRes.status, 200)
+      assert.equal(prmRes.headers.get('Cache-Control'), 'no-store')
+      const prm = (await prmRes.json()) as { resource: string; authorization_servers: string[]; scopes_supported: string[] }
+      assert.equal(prm.resource, 'https://kindred.example.test/mcp')
+      assert.deepEqual(prm.authorization_servers, ['https://kindred.example.test'])
+      assert.deepEqual(prm.scopes_supported, ['kindred'])
+    }
+
+    const asRes = await app.request('https://kindred.example.test/.well-known/oauth-authorization-server', { method: 'GET' }, env)
+    assert.equal(asRes.status, 200)
+    const asMeta = (await asRes.json()) as {
+      issuer: string
+      authorization_endpoint: string
+      token_endpoint: string
+      registration_endpoint: string
+      code_challenge_methods_supported: string[]
+      client_id_metadata_document_supported: boolean
+    }
+    assert.equal(asMeta.issuer, 'https://kindred.example.test')
+    assert.equal(asMeta.authorization_endpoint, 'https://kindred.example.test/oauth/authorize')
+    assert.equal(asMeta.token_endpoint, 'https://kindred.example.test/oauth/token')
+    assert.equal(asMeta.registration_endpoint, 'https://kindred.example.test/oauth/register')
+    assert.deepEqual(asMeta.code_challenge_methods_supported, ['S256'])
+    assert.equal(asMeta.client_id_metadata_document_supported, true)
+
+    const session = await runAnonymousOAuthFlow(env, { resource: 'https://kindred.example.test/mcp' })
+
+    const authGet = await app.request(
+      'https://kindred.example.test/mcp',
+      { method: 'GET', headers: { Authorization: `Bearer ${session.access_token}` } },
+      env,
+    )
+    assert.equal(authGet.status, 405)
+    assert.equal(authGet.headers.get('Allow'), 'POST, OPTIONS')
 
     const badJson = await app.request(
       'https://kindred.example.test/mcp',
       {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
         body: '{not-valid-json',
       },
       env,
     )
     assert.equal(badJson.status, 400)
-    const badJsonBody = (await badJson.json()) as { error?: { code?: number } }
-    assert.equal(badJsonBody.error?.code, -32700)
+    assert.equal(((await badJson.json()) as { error?: { code?: number } }).error?.code, -32700)
 
     const notif = await app.request(
       'https://kindred.example.test/mcp',
       {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
         body: JSON.stringify({ jsonrpc: '2.0', method: 'notifications/cancelled', params: { requestId: 1 } }),
       },
       env,
@@ -130,7 +361,7 @@ describe('Streamable HTTP MCP, CORS, and route boundary compliance', () => {
       'https://kindred.example.test/mcp',
       {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
         body: JSON.stringify([]),
       },
       env,
@@ -141,11 +372,12 @@ describe('Streamable HTTP MCP, CORS, and route boundary compliance', () => {
       'https://kindred.example.test/mcp',
       {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
         body: JSON.stringify([
           { jsonrpc: '2.0', id: 1, method: 'initialize', params: {} },
           { jsonrpc: '2.0', method: 'notifications/initialized' },
           { jsonrpc: '2.0', id: 2, method: 'tools/list' },
+          { jsonrpc: '2.0', id: 3, method: 'prompts/list' },
         ]),
       },
       env,
@@ -160,20 +392,25 @@ describe('Streamable HTTP MCP, CORS, and route boundary compliance', () => {
         capabilities?: { tools?: unknown; resources?: unknown; prompts?: unknown }
         instructions?: string
         tools?: Array<{ name: string }>
+        prompts?: Array<{ name: string }>
       }
     }>
-    assert.equal(items.length, 2)
+    assert.equal(items.length, 3)
     assert.equal(items[0]?.result?.protocolVersion, '2025-03-26')
-    assert.equal(items[0]?.result?.serverInfo?.version, '2.3.0')
+    assert.equal(items[0]?.result?.serverInfo?.version, '2.4.0')
     assert.ok(items[0]?.result?.capabilities?.prompts)
     assert.ok(items[0]?.result?.instructions?.includes('kindred_guide'))
     assert.equal(items[1]?.result?.tools?.length, 13)
+    assert.deepEqual(
+      items[2]?.result?.prompts?.map((p) => p.name),
+      ['start_kindred', 'upgrade_kindred'],
+    )
 
     const guideCall = await app.request(
       'https://kindred.example.test/mcp',
       {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
         body: JSON.stringify({
           jsonrpc: '2.0',
           id: 20,
@@ -184,292 +421,550 @@ describe('Streamable HTTP MCP, CORS, and route boundary compliance', () => {
       env,
     )
     assert.equal(guideCall.status, 200)
-    assert.equal(guideCall.headers.get('Cache-Control'), 'no-store')
     const guidePayload = (await guideCall.json()) as {
-      result?: {
-        isError?: boolean
-        structuredContent?: {
-          current_skill_version?: number
-          mcp_url?: string
-          guide_markdown?: string
-          seeds?: Array<{ lens: string; angle: string }>
-        }
-      }
+      result?: { isError?: boolean; structuredContent?: { current_skill_version?: number; seeds?: unknown[] } }
     }
     assert.equal(guidePayload.result?.isError, false)
     assert.equal(guidePayload.result?.structuredContent?.current_skill_version, 2)
-    assert.equal(guidePayload.result?.structuredContent?.mcp_url, 'https://kindred.example.test/mcp')
-    assert.ok(guidePayload.result?.structuredContent?.guide_markdown?.includes('Step 0: Preferred Transport'))
     assert.equal(guidePayload.result?.structuredContent?.seeds?.length, 8)
 
-    const promptsList = await app.request(
+    const prePublishInbox = await app.request(
       'https://kindred.example.test/mcp',
       {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ jsonrpc: '2.0', id: 22, method: 'prompts/list' }),
-      },
-      env,
-    )
-    assert.equal(promptsList.status, 200)
-    const promptsListBody = (await promptsList.json()) as {
-      result?: { prompts?: Array<{ name: string }> }
-    }
-    assert.deepEqual(
-      promptsListBody.result?.prompts?.map((p) => p.name),
-      ['start_kindred', 'upgrade_kindred'],
-    )
-
-    const startPrompt = await app.request(
-      'https://kindred.example.test/mcp',
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          jsonrpc: '2.0',
-          id: 23,
-          method: 'prompts/get',
-          params: { name: 'start_kindred', arguments: { locale: 'zh' } },
-        }),
-      },
-      env,
-    )
-    assert.equal(startPrompt.status, 200)
-    const startPromptBody = (await startPrompt.json()) as {
-      result?: { messages?: Array<{ content?: { text?: string } }> }
-    }
-    assert.ok(startPromptBody.result?.messages?.[0]?.content?.text?.includes('Session Scenario Sparks'))
-
-    const upgradePrompt = await app.request(
-      'https://kindred.example.test/mcp',
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          jsonrpc: '2.0',
-          id: 24,
-          method: 'prompts/get',
-          params: { name: 'upgrade_kindred', arguments: { locale: 'en' } },
-        }),
-      },
-      env,
-    )
-    assert.equal(upgradePrompt.status, 200)
-    const upgradePromptBody = (await upgradePrompt.json()) as {
-      result?: { messages?: Array<{ content?: { text?: string } }> }
-    }
-    assert.ok(upgradePromptBody.result?.messages?.[0]?.content?.text?.includes('Upgrade Existing Kindred Quiz'))
-
-    const badPrompt = await app.request(
-      'https://kindred.example.test/mcp',
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          jsonrpc: '2.0',
-          id: 25,
-          method: 'prompts/get',
-          params: { name: 'nonexistent_prompt' },
-        }),
-      },
-      env,
-    )
-    assert.equal(badPrompt.status, 400)
-    const badPromptBody = (await badPrompt.json()) as { error?: { code?: number } }
-    assert.equal(badPromptBody.error?.code, -32602)
-
-    const seedsCall = await app.request(
-      'https://kindred.example.test/mcp',
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
         body: JSON.stringify({
           jsonrpc: '2.0',
           id: 21,
           method: 'tools/call',
-          params: { name: 'kindred_quiz_seeds', arguments: { locale: 'zh', count: 4 } },
+          params: { name: 'kindred_inbox', arguments: {} },
         }),
       },
       env,
     )
-    assert.equal(seedsCall.status, 200)
-    const seedsPayload = (await seedsCall.json()) as {
-      result?: { isError?: boolean; structuredContent?: { count?: number; seeds?: Array<{ lens: string; angle: string }> } }
+    const preInboxBody = (await prePublishInbox.json()) as {
+      result?: { isError?: boolean; structuredContent?: { agent_id?: string; quiz_ready?: boolean; next_step?: string } }
     }
-    assert.equal(seedsPayload.result?.isError, false)
-    assert.equal(seedsPayload.result?.structuredContent?.count, 4)
-    assert.equal(new Set(seedsPayload.result?.structuredContent?.seeds?.map((s) => s.lens)).size, 4)
+    assert.equal(preInboxBody.result?.isError, false)
+    assert.equal(preInboxBody.result?.structuredContent?.quiz_ready, false)
+    assert.ok(preInboxBody.result?.structuredContent?.next_step?.includes('kindred_publish_quiz'))
+    const oauthAgentId = preInboxBody.result?.structuredContent?.agent_id
+    assert.ok(oauthAgentId)
 
-    const httpSeeds = await app.request('https://kindred.example.test/api/quiz/seeds?locale=en&count=6', { method: 'GET' }, env)
-    assert.equal(httpSeeds.status, 200)
-    assert.equal(httpSeeds.headers.get('Cache-Control'), 'no-store')
-    const httpSeedsBody = (await httpSeeds.json()) as { count: number; seeds: Array<{ lens: string; angle: string }> }
-    assert.equal(httpSeedsBody.count, 6)
-    assert.equal(new Set(httpSeedsBody.seeds.map((s) => s.lens)).size, 6)
-
-    const okCall = await app.request(
+    const firstPublish = await app.request(
       'https://kindred.example.test/mcp',
       {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
         body: JSON.stringify({
           jsonrpc: '2.0',
-          id: 3,
+          id: 22,
           method: 'tools/call',
-          params: {
-            name: 'kindred_publish_quiz',
-            arguments: {
-              questions: [1, 2, 3].map((i) => ({
-                dimension: 'Taste',
-                prompt: `Evening habit question ${i}?`,
-                options: { A: `opt-a-${i}`, B: `opt-b-${i}`, C: `opt-c-${i}`, D: `opt-d-${i}` },
-                owner_choice: 'A',
-              })),
-            },
-          },
+          params: { name: 'kindred_publish_quiz', arguments: { questions: sampleQuestions('oauth-v1') } },
         }),
       },
       env,
     )
-    assert.equal(okCall.status, 200)
-    const okPayload = (await okCall.json()) as {
-      result?: { isError?: boolean; structuredContent?: { agent_id?: string; agent_token?: string } }
+    const firstPubBody = (await firstPublish.json()) as {
+      result?: {
+        isError?: boolean
+        structuredContent?: {
+          agent_id?: string
+          agent_token?: string
+          mcp_url?: string
+          quiz_version?: number
+          upgraded?: boolean
+        }
+      }
     }
-    assert.equal(okPayload.result?.isError, false)
-    const token = okPayload.result?.structuredContent?.agent_token
-    const agentId = okPayload.result?.structuredContent?.agent_id
-    assert.ok(token)
+    assert.equal(firstPubBody.result?.isError, false)
+    assert.equal(firstPubBody.result?.structuredContent?.agent_id, oauthAgentId)
+    assert.equal(firstPubBody.result?.structuredContent?.agent_token, undefined)
+    assert.equal(firstPubBody.result?.structuredContent?.mcp_url, 'https://kindred.example.test/mcp')
+    assert.equal(firstPubBody.result?.structuredContent?.quiz_version, 1)
+    assert.equal(firstPubBody.result?.structuredContent?.upgraded, false)
 
-    const bearerInbox = await app.request(
+    const spoofArgRes = await app.request(
       'https://kindred.example.test/mcp',
       {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
         body: JSON.stringify({
           jsonrpc: '2.0',
-          id: 5,
+          id: 23,
+          method: 'tools/call',
+          params: { name: 'kindred_inbox', arguments: { agent_token: 'knd_other_agent_token' } },
+        }),
+      },
+      env,
+    )
+    const spoofBody = (await spoofArgRes.json()) as { result?: { isError?: boolean } }
+    assert.equal(spoofBody.result?.isError, true)
+
+    const secondPublish = await app.request(
+      'https://kindred.example.test/mcp',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 24,
+          method: 'tools/call',
+          params: { name: 'kindred_publish_quiz', arguments: { questions: sampleQuestions('oauth-v2') } },
+        }),
+      },
+      env,
+    )
+    const secondPubBody = (await secondPublish.json()) as {
+      result?: { isError?: boolean; structuredContent?: { quiz_version?: number; upgraded?: boolean } }
+    }
+    assert.equal(secondPubBody.result?.isError, false)
+    assert.equal(secondPubBody.result?.structuredContent?.quiz_version, 2)
+    assert.equal(secondPubBody.result?.structuredContent?.upgraded, true)
+
+    const refreshRes = await app.request(
+      'https://kindred.example.test/oauth/token',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          grant_type: 'refresh_token',
+          client_id: session.client.client_id,
+          refresh_token: session.refresh_token!,
+        }).toString(),
+      },
+      env,
+    )
+    assert.equal(refreshRes.status, 200)
+    const rotated = (await refreshRes.json()) as { access_token: string; refresh_token: string }
+    assert.notEqual(rotated.access_token, session.access_token)
+    assert.notEqual(rotated.refresh_token, session.refresh_token)
+
+    const oldTokenAfterRotate = await app.request(
+      'https://kindred.example.test/mcp',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 25, method: 'ping' }),
+      },
+      env,
+    )
+    assert.equal(oldTokenAfterRotate.status, 401)
+
+    const newTokenInbox = await app.request(
+      'https://kindred.example.test/mcp',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${rotated.access_token}` },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 26,
           method: 'tools/call',
           params: { name: 'kindred_inbox', arguments: {} },
         }),
       },
       env,
     )
-    const bearerBody = (await bearerInbox.json()) as {
-      result?: { isError?: boolean; structuredContent?: { agent_id?: string } }
+    const newInboxBody = (await newTokenInbox.json()) as {
+      result?: { structuredContent?: { agent_id?: string; current_quiz_version?: number; quiz_ready?: boolean } }
     }
-    assert.equal(bearerBody.result?.isError, false)
-    assert.equal(bearerBody.result?.structuredContent?.agent_id, agentId)
+    assert.equal(newInboxBody.result?.structuredContent?.agent_id, oauthAgentId)
+    assert.equal(newInboxBody.result?.structuredContent?.current_quiz_version, 2)
+    assert.equal(newInboxBody.result?.structuredContent?.quiz_ready, true)
 
-    const queryInbox = await app.request(
-      `https://kindred.example.test/mcp?token=${encodeURIComponent(token!)}`,
+    const replayRefresh = await app.request(
+      'https://kindred.example.test/oauth/token',
       {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          jsonrpc: '2.0',
-          id: 6,
-          method: 'tools/call',
-          params: { name: 'kindred_inbox', arguments: {} },
-        }),
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          grant_type: 'refresh_token',
+          client_id: session.client.client_id,
+          refresh_token: session.refresh_token!,
+        }).toString(),
       },
       env,
     )
-    const queryBody = (await queryInbox.json()) as {
-      result?: { isError?: boolean; structuredContent?: { agent_id?: string } }
-    }
-    assert.equal(queryBody.result?.isError, false)
-    assert.equal(queryBody.result?.structuredContent?.agent_id, agentId)
+    assert.equal(replayRefresh.status, 400)
+    assert.equal(((await replayRefresh.json()) as { error?: string }).error, 'invalid_grant')
 
-    const argInbox = await app.request(
+    const revokedAfterReplay = await app.request(
       'https://kindred.example.test/mcp',
       {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          jsonrpc: '2.0',
-          id: 8,
-          method: 'tools/call',
-          params: { name: 'kindred_inbox', arguments: { agent_token: token } },
-        }),
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${rotated.access_token}` },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 27, method: 'ping' }),
       },
       env,
     )
-    const argBody = (await argInbox.json()) as {
-      result?: { isError?: boolean; structuredContent?: { agent_id?: string } }
-    }
-    assert.equal(argBody.result?.isError, false)
-    assert.equal(argBody.result?.structuredContent?.agent_id, agentId)
+    assert.equal(revokedAfterReplay.status, 401)
 
-    const argOverridesBadHeader = await app.request(
+    const eraseSession = await runAnonymousOAuthFlow(env)
+    const eraseCall = await app.request(
       'https://kindred.example.test/mcp',
       {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer knd_invalid_header' },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${eraseSession.access_token}` },
         body: JSON.stringify({
           jsonrpc: '2.0',
-          id: 9,
+          id: 28,
           method: 'tools/call',
-          params: { name: 'kindred_inbox', arguments: { agent_token: token } },
+          params: { name: 'kindred_erase', arguments: {} },
         }),
       },
       env,
     )
-    const argWinBody = (await argOverridesBadHeader.json()) as {
-      result?: { isError?: boolean; structuredContent?: { agent_id?: string } }
-    }
-    assert.equal(argWinBody.result?.isError, false)
-    assert.equal(argWinBody.result?.structuredContent?.agent_id, agentId)
+    assert.equal(eraseCall.status, 200)
+    assert.equal(((await eraseCall.json()) as { result?: { isError?: boolean } }).result?.isError, false)
 
-    const badArgOverridesValidHeader = await app.request(
+    const afterEraseMcp = await app.request(
       'https://kindred.example.test/mcp',
       {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({
-          jsonrpc: '2.0',
-          id: 10,
-          method: 'tools/call',
-          params: { name: 'kindred_inbox', arguments: { agent_token: 'knd_invalid_arg' } },
-        }),
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${eraseSession.access_token}` },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 29, method: 'ping' }),
       },
       env,
     )
-    const badArgBody = (await badArgOverridesValidHeader.json()) as {
-      result?: { isError?: boolean }
-    }
-    assert.equal(badArgBody.result?.isError, true)
-
-    const trailingSlashPing = await app.request(
-      'https://kindred.example.test/mcp/',
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ jsonrpc: '2.0', id: 7, method: 'ping' }),
-      },
-      env,
-    )
-    assert.equal(trailingSlashPing.status, 200)
-
-    const errCall = await app.request(
-      'https://kindred.example.test/mcp',
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          jsonrpc: '2.0',
-          id: 4,
-          method: 'tools/call',
-          params: { name: 'kindred_unknown_tool', arguments: {} },
-        }),
-      },
-      env,
-    )
-    assert.equal(errCall.status, 200)
-    const errPayload = (await errCall.json()) as { result?: { isError?: boolean } }
-    assert.equal(errPayload.result?.isError, true)
+    assert.equal(afterEraseMcp.status, 401)
   })
 
-  test('GET /skill.md and /llms.txt return markdown while malformed /skill.md, /api/none, and /mcp/extra return 404 instead of SPA HTML', async () => {
+  test('OAuth 2.1 enforces redirect URI safety, CSRF, PKCE S256, code replay revocation, confidential client auth, revocation, and legacy HTTP token compatibility', async () => {
+    const env = makeEnv()
+
+    for (const badUri of [
+      'http://evil.example/cb',
+      'https://169.254.169.254/latest/meta-data',
+      'https://agent.meta.ai/cb#frag',
+      'javascript:alert(1)',
+    ]) {
+      const badReg = await app.request(
+        'https://kindred.example.test/oauth/register',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ redirect_uris: [badUri] }),
+        },
+        env,
+      )
+      assert.equal(badReg.status, 400, `Expected 400 for redirect URI ${badUri}`)
+    }
+
+    const session = await runAnonymousOAuthFlow(env, {
+      redirectUri: 'http://127.0.0.1/callback',
+      authMethod: 'client_secret_basic',
+    })
+
+    const mismatchRedirect = await app.request(
+      `https://kindred.example.test/oauth/authorize?response_type=code&client_id=${encodeURIComponent(session.client.client_id)}&redirect_uri=${encodeURIComponent('https://evil.example/steal')}&code_challenge=${'a'.repeat(43)}&code_challenge_method=S256`,
+      { method: 'GET' },
+      env,
+    )
+    assert.equal(mismatchRedirect.status, 400)
+    assert.equal(mismatchRedirect.headers.get('Location'), null)
+
+    const badResource = await app.request(
+      `https://kindred.example.test/oauth/authorize?response_type=code&client_id=${encodeURIComponent(session.client.client_id)}&redirect_uri=${encodeURIComponent('http://127.0.0.1:43210/callback')}&code_challenge=${'a'.repeat(43)}&code_challenge_method=S256&resource=${encodeURIComponent('https://other.example/mcp')}&state=s1`,
+      { method: 'GET' },
+      env,
+    )
+    assert.equal(badResource.status, 400)
+    assert.equal(badResource.headers.get('Location'), null)
+
+    const missingCsrfPost = await app.request(
+      'https://kindred.example.test/oauth/authorize',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          request_id: session.requestId,
+          csrf_token: session.csrfToken,
+          decision: 'approve',
+        }).toString(),
+      },
+      env,
+    )
+    assert.equal(missingCsrfPost.status, 400)
+
+    const unverifiedCodeReplay = await app.request(
+      'https://kindred.example.test/oauth/token',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          Authorization: `Basic ${btoa(`${encodeURIComponent(session.client.client_id)}:${encodeURIComponent(session.client.client_secret!)}`)}`,
+        },
+        body: new URLSearchParams({
+          grant_type: 'authorization_code',
+          code: session.code,
+          redirect_uri: session.redirectUri,
+          code_verifier: 'wrong_verifier_abcdefghijklmnopqrstuvwxyz_0123456789',
+        }).toString(),
+      },
+      env,
+    )
+    assert.equal(unverifiedCodeReplay.status, 400)
+    const stillValidAfterBadReplay = await app.request(
+      'https://kindred.example.test/mcp',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 29, method: 'ping' }),
+      },
+      env,
+    )
+    assert.equal(stillValidAfterBadReplay.status, 200)
+
+    const unauthRevoke = await app.request(
+      'https://kindred.example.test/oauth/revoke',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ token: session.access_token }).toString(),
+      },
+      env,
+    )
+    assert.equal(unauthRevoke.status, 400)
+    const stillValidAfterUnauthRevoke = await app.request(
+      'https://kindred.example.test/mcp',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 300, method: 'ping' }),
+      },
+      env,
+    )
+    assert.equal(stillValidAfterUnauthRevoke.status, 200)
+
+    const oauthInQueryRejected = await app.request(
+      `https://kindred.example.test/mcp?token=${encodeURIComponent(session.access_token)}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 301, method: 'ping' }),
+      },
+      env,
+    )
+    assert.equal(oauthInQueryRejected.status, 401)
+
+    const oauthOnDirectApiRejected = await app.request(
+      'https://kindred.example.test/api/agent',
+      {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      },
+      env,
+    )
+    assert.equal(oauthOnDirectApiRejected.status, 401)
+
+    const codeReplay = await app.request(
+      'https://kindred.example.test/oauth/token',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          Authorization: `Basic ${btoa(`${encodeURIComponent(session.client.client_id)}:${encodeURIComponent(session.client.client_secret!)}`)}`,
+        },
+        body: new URLSearchParams({
+          grant_type: 'authorization_code',
+          code: session.code,
+          redirect_uri: session.redirectUri,
+          code_verifier: session.codeVerifier,
+        }).toString(),
+      },
+      env,
+    )
+    assert.equal(codeReplay.status, 400)
+    assert.equal(((await codeReplay.json()) as { error?: string }).error, 'invalid_grant')
+
+    const revokedByCodeReplay = await app.request(
+      'https://kindred.example.test/mcp',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 30, method: 'ping' }),
+      },
+      env,
+    )
+    assert.equal(revokedByCodeReplay.status, 401)
+
+    const omittedRedirectSession = await runAnonymousOAuthFlow(env, {
+      redirectUri: 'http://127.0.0.1:45123/cb',
+      omitRedirectUriOnAuthorize: true,
+      omitRedirectUriOnToken: true,
+      grantTypes: ['authorization_code'],
+    })
+    assert.equal(omittedRedirectSession.refresh_token, undefined)
+
+    const defaultRegRes = await app.request(
+      'https://kindred.example.test/oauth/register',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ redirect_uris: ['https://example.org/cb'] }),
+      },
+      env,
+    )
+    assert.equal(defaultRegRes.status, 201)
+    const defaultReg = (await defaultRegRes.json()) as {
+      token_endpoint_auth_method: string
+      client_secret?: string
+      grant_types: string[]
+    }
+    assert.equal(defaultReg.token_endpoint_auth_method, 'client_secret_basic')
+    assert.ok(defaultReg.client_secret?.startsWith('kndcs_'))
+    assert.deepEqual(defaultReg.grant_types, ['authorization_code'])
+
+    const oversizedStream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(new Uint8Array(10_000).fill(97))
+        controller.close()
+      },
+    })
+    const oversizedReg = await app.request(
+      'https://kindred.example.test/oauth/register',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: oversizedStream,
+      },
+      env,
+    )
+    assert.equal(oversizedReg.status, 400)
+
+    const raceSession = await runAnonymousOAuthFlow(env)
+    const makeRefreshReq = () =>
+      app.request(
+        'https://kindred.example.test/oauth/token',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({
+            grant_type: 'refresh_token',
+            client_id: raceSession.client.client_id,
+            refresh_token: raceSession.refresh_token!,
+          }).toString(),
+        },
+        env,
+      )
+    const [r1, r2] = await Promise.all([makeRefreshReq(), makeRefreshReq()])
+    const statuses = [r1.status, r2.status].sort()
+    assert.deepEqual(statuses, [200, 400])
+    const winnerRes = r1.status === 200 ? r1 : r2
+    const winnerBody = (await winnerRes.json()) as { access_token: string }
+    const winnerRevokedAfterRace = await app.request(
+      'https://kindred.example.test/mcp',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${winnerBody.access_token}` },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 305, method: 'ping' }),
+      },
+      env,
+    )
+    assert.equal(winnerRevokedAfterRace.status, 401)
+
+    const originalFetch = globalThis.fetch
+    let observedRedirectMode: string | undefined
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const targetUrl = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+      observedRedirectMode = init?.redirect
+      if (targetUrl === 'https://chatgpt.com/oauth/client.json') {
+        return new Response(
+          JSON.stringify({
+            client_id: 'https://chatgpt.com/oauth/client.json',
+            client_name: 'ChatGPT',
+            redirect_uris: ['https://chatgpt.com/connector_platform_oauth_redirect'],
+            token_endpoint_auth_method: 'private_key_jwt',
+            token_endpoint_auth_methods_supported: ['none', 'private_key_jwt'],
+            grant_types: ['authorization_code', 'refresh_token', 'urn:ietf:params:oauth:grant-type:jwt-bearer'],
+            response_types: ['code'],
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        )
+      }
+      return new Response(null, { status: 302, headers: { Location: 'https://evil.example/meta.json' } })
+    }) as typeof fetch
+    try {
+      const cimdAuthorize = await app.request(
+        `https://kindred.example.test/oauth/authorize?response_type=code&client_id=${encodeURIComponent('https://chatgpt.com/oauth/client.json')}&code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM&code_challenge_method=S256`,
+        { method: 'GET' },
+        env,
+      )
+      assert.equal(observedRedirectMode, 'manual')
+      assert.equal(cimdAuthorize.status, 200)
+      assert.ok(
+        (cimdAuthorize.headers.get('Content-Security-Policy') ?? '').includes(
+          "form-action 'self' https://chatgpt.com",
+        ),
+      )
+
+      const cimdRedirectRejected = await app.request(
+        `https://kindred.example.test/oauth/authorize?response_type=code&client_id=${encodeURIComponent('https://redir.example/client.json')}&code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM&code_challenge_method=S256`,
+        { method: 'GET' },
+        env,
+      )
+      assert.equal(cimdRedirectRejected.status, 400)
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+
+    const revocable = await runAnonymousOAuthFlow(env)
+    const revokeRes = await app.request(
+      'https://kindred.example.test/oauth/revoke',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ token: revocable.access_token, client_id: revocable.client.client_id }).toString(),
+      },
+      env,
+    )
+    assert.equal(revokeRes.status, 200)
+    const afterRevoke = await app.request(
+      'https://kindred.example.test/mcp',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${revocable.access_token}` },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 31, method: 'ping' }),
+      },
+      env,
+    )
+    assert.equal(afterRevoke.status, 401)
+
+    const legacyQuizRes = await app.request(
+      'https://kindred.example.test/api/quiz',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ questions: sampleQuestions('legacy') }),
+      },
+      env,
+    )
+    assert.equal(legacyQuizRes.status, 201)
+    const legacyQuiz = (await legacyQuizRes.json()) as { agent_id: string; agent_token: string }
+    const legacyUpgradeMcp = await app.request(
+      `https://kindred.example.test/mcp?token=${encodeURIComponent(legacyQuiz.agent_token)}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 32,
+          method: 'tools/call',
+          params: { name: 'kindred_publish_quiz', arguments: { questions: sampleQuestions('legacy-v2') } },
+        }),
+      },
+      env,
+    )
+    assert.equal(legacyUpgradeMcp.status, 200)
+    const legacyUpgradeBody = (await legacyUpgradeMcp.json()) as {
+      result?: { structuredContent?: { agent_id?: string; mcp_url?: string; quiz_version?: number } }
+    }
+    assert.equal(legacyUpgradeBody.result?.structuredContent?.agent_id, legacyQuiz.agent_id)
+    assert.equal(legacyUpgradeBody.result?.structuredContent?.quiz_version, 2)
+    assert.equal(legacyUpgradeBody.result?.structuredContent?.mcp_url, 'https://kindred.example.test/mcp')
+  })
+
+  test('GET /skill.md, /llms.txt, /.well-known/mcp.json return expected docs while malformed/unknown paths return 404 instead of SPA HTML', async () => {
     const env = makeEnv()
     for (const path of ['/skill.md', '/llms.txt']) {
       const ok = await app.request(`https://kindred.example.test${path}`, { method: 'GET' }, env)
@@ -480,6 +975,7 @@ describe('Streamable HTTP MCP, CORS, and route boundary compliance', () => {
       assert.match(ok.headers.get('Link') ?? '', /\/\.well-known\/mcp\.json/)
       const text = await ok.text()
       assert.ok(text.includes('https://kindred.example.test/mcp'))
+      assert.ok(text.includes('oauth-protected-resource'))
       assert.ok(text.includes('Step 0: Preferred Transport'))
       assert.ok(text.includes('kindred_guide'))
       assert.ok(text.includes('Session Scenario Sparks'))
@@ -495,10 +991,16 @@ describe('Streamable HTTP MCP, CORS, and route boundary compliance', () => {
     const manifest = (await wellKnown.json()) as {
       endpoint?: string
       protocol_version?: string
+      auth?: { type?: string; protected_resource_metadata?: string }
       capabilities?: { tools?: boolean; resources?: boolean; prompts?: boolean }
     }
     assert.equal(manifest.endpoint, 'https://kindred.example.test/mcp')
     assert.equal(manifest.protocol_version, '2025-03-26')
+    assert.equal(manifest.auth?.type, 'oauth2')
+    assert.equal(
+      manifest.auth?.protected_resource_metadata,
+      'https://kindred.example.test/.well-known/oauth-protected-resource',
+    )
     assert.deepEqual(manifest.capabilities, { tools: true, resources: true, prompts: true })
 
     const wellKnownHead = await app.request('https://kindred.example.test/.well-known/mcp.json', { method: 'HEAD' }, env)
@@ -507,10 +1009,19 @@ describe('Streamable HTTP MCP, CORS, and route boundary compliance', () => {
 
     const wranglerConfig = JSON.parse(
       readFileSync(fileURLToPath(new URL('../../wrangler.jsonc', import.meta.url)), 'utf-8'),
-    ) as { assets?: { run_worker_first?: string[] } }
+    ) as { assets?: { run_worker_first?: string[] }; compatibility_flags?: string[] }
     assert.ok(wranglerConfig.assets?.run_worker_first?.includes('/.well-known/*'))
+    assert.ok(wranglerConfig.assets?.run_worker_first?.includes('/oauth/*'))
+    assert.ok(wranglerConfig.compatibility_flags?.includes('global_fetch_strictly_public'))
 
-    for (const badPath of ['/skill.md%EF%BC%8C%E7%84%B6%E5%90%8E', '/.well-known/other', '/api', '/api/none', '/mcp/extra']) {
+    for (const badPath of [
+      '/skill.md%EF%BC%8C%E7%84%B6%E5%90%8E',
+      '/.well-known/other',
+      '/oauth/unknown',
+      '/api',
+      '/api/none',
+      '/mcp/extra',
+    ]) {
       const res = await app.request(`https://kindred.example.test${badPath}`, { method: 'GET' }, env)
       assert.equal(res.status, 404, `Expected 404 on ${badPath}, got ${res.status}`)
     }

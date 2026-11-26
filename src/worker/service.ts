@@ -28,6 +28,7 @@ import {
   ensurePoolPairingsForAgent,
   formatDrawRoundView,
   getAgentByToken,
+  isOAuthAgent,
   listAnchorNotes,
   listAnswers,
   listQuestions,
@@ -53,8 +54,17 @@ function normalizeConfidence(raw: unknown): ConfidenceLevel {
   return raw === 'high' || raw === 'medium' || raw === 'low' ? raw : 'medium'
 }
 
-async function requireAgent(db: D1Database, token: string | null | undefined): Promise<AgentRow> {
-  const agent = await getAgentByToken(db, token)
+export interface TokenAuthOptions {
+  allowOAuth?: boolean
+  expectedResource?: string
+}
+
+async function requireAgent(
+  db: D1Database,
+  token: string | null | undefined,
+  auth?: TokenAuthOptions,
+): Promise<AgentRow> {
+  const agent = await getAgentByToken(db, token, auth)
   if (!agent) {
     throw new ProtocolError(401, 'Invalid or missing agent_token. Call kindred_publish_quiz first to mint one.')
   }
@@ -98,6 +108,7 @@ export async function publishQuiz(
   origin: string,
   token: string | null | undefined,
   rawQuestions: unknown,
+  auth?: TokenAuthOptions,
 ) {
   if (!Array.isArray(rawQuestions) || rawQuestions.length < 3 || rawQuestions.length > 10) {
     throw new ProtocolError(400, 'questions must be an array of 3 to 10 items')
@@ -170,7 +181,7 @@ export async function publishQuiz(
   }
 
   const trimmedToken = typeof token === 'string' ? token.trim() : ''
-  let agent = trimmedToken ? await getAgentByToken(db, trimmedToken) : null
+  let agent = trimmedToken ? await getAgentByToken(db, trimmedToken, auth) : null
   if (trimmedToken && !agent) {
     throw new ProtocolError(401, 'Invalid agent_token')
   }
@@ -182,7 +193,8 @@ export async function publishQuiz(
   let refreshPendingAIdx: number | null = null
   let refreshPendingBIdx: number | null = null
   let quizVersion = 1
-  const upgraded = Boolean(agent)
+  const previousVersion = agent ? Number(agent.current_quiz_version ?? 0) : 0
+  const upgraded = previousVersion > 0
 
   if (!agent) {
     const id = randomToken('agt_', 12)
@@ -206,7 +218,6 @@ export async function publishQuiz(
       last_seen_at: now,
     }
   } else {
-    const previousVersion = Number(agent.current_quiz_version ?? 1)
     quizVersion = previousVersion + 1
     upgradeGuardIdx = batchStatements.length
     batchStatements.push(
@@ -330,7 +341,6 @@ export async function publishQuiz(
 
   const newPairings = await ensurePoolPairingsForAgent(db, agent.id, { maxNew: 1, dailyLimit: 3 })
   const base = origin.replace(/\/+$/, '')
-  const effectiveToken = mintedToken ?? trimmedToken
 
   let initialQuiz: {
     pairing_id: string
@@ -379,7 +389,7 @@ export async function publishQuiz(
   return {
     agent_id: agent.id,
     agent_token: mintedToken ?? undefined,
-    mcp_url: `${base}/mcp?token=${effectiveToken}`,
+    mcp_url: mintedToken && !isOAuthAgent(agent) ? `${base}/mcp?token=${mintedToken}` : `${base}/mcp`,
     quiz_version: quizVersion,
     upgraded,
     skill_version: CURRENT_SKILL_VERSION,
@@ -447,9 +457,9 @@ export async function getInbox(
   db: D1Database,
   origin: string,
   token: string | null | undefined,
-  options?: { maxNew?: number; dailyLimit?: number },
+  options?: { maxNew?: number; dailyLimit?: number; auth?: TokenAuthOptions },
 ) {
-  const agent = await requireAgent(db, token)
+  const agent = await requireAgent(db, token, options?.auth)
   if (agent.quiz_ready) {
     await ensurePoolPairingsForAgent(db, agent.id, options)
   }
@@ -639,13 +649,17 @@ export async function getInbox(
 
   return {
     agent_id: agent.id,
-    current_quiz_version: Number(agent.current_quiz_version ?? 1),
+    quiz_ready: Boolean(agent.quiz_ready),
+    current_quiz_version: Number(agent.current_quiz_version ?? 0),
     skill_version: agentSkillVersion,
     protocol_update: protocolUpdate,
     pending_quizzes: pendingQuizzes,
     ready_for_human: readyForHuman,
     revealed_pairings: revealedPairings,
     active_draw_turns: activeDrawTurns,
+    next_step: agent.quiz_ready
+      ? undefined
+      : 'Your anonymous Kindred session is connected, but no quiz is published yet. Call kindred_guide, align 6-8 blind questions with your human in chat, then call kindred_publish_quiz to enter the discovery pool.',
   }
 }
 
@@ -654,8 +668,9 @@ export async function submitAgentAnswers(
   token: string | null | undefined,
   pairingId: string,
   rawAnswers: unknown,
+  auth?: TokenAuthOptions,
 ) {
-  const agent = await requireAgent(db, token)
+  const agent = await requireAgent(db, token, auth)
   if (!Array.isArray(rawAnswers) || rawAnswers.length === 0) {
     throw new ProtocolError(400, 'answers array is required')
   }
@@ -815,8 +830,9 @@ export async function getPairingReveal(
   origin: string,
   token: string | null | undefined,
   pairingId: string,
+  auth?: TokenAuthOptions,
 ) {
-  const agent = await requireAgent(db, token)
+  const agent = await requireAgent(db, token, auth)
   const rawPairing = await db.prepare('SELECT * FROM pairings WHERE id = ?').bind(pairingId).first<PairingRow>()
   if (!rawPairing) throw new ProtocolError(404, 'Pairing not found')
   if (rawPairing.agent_a_id !== agent.id && rawPairing.agent_b_id !== agent.id) {
@@ -989,8 +1005,9 @@ export async function submitHumanAnswers(
   token: string | null | undefined,
   pairingId: string,
   rawAnswers: unknown,
+  auth?: TokenAuthOptions,
 ) {
-  const agent = await requireAgent(db, token)
+  const agent = await requireAgent(db, token, auth)
   const rawPairing = await db.prepare('SELECT * FROM pairings WHERE id = ?').bind(pairingId).first<PairingRow>()
   if (!rawPairing) throw new ProtocolError(404, 'Pairing not found')
   if (rawPairing.agent_a_id !== agent.id && rawPairing.agent_b_id !== agent.id) {
@@ -1076,7 +1093,7 @@ export async function submitHumanAnswers(
     throw new ProtocolError(409, 'Human answers already submitted')
   }
 
-  return getPairingReveal(db, origin, token, pairing.id)
+  return getPairingReveal(db, origin, token, pairing.id, auth)
 }
 
 export async function postAnchorNote(
@@ -1085,8 +1102,9 @@ export async function postAnchorNote(
   pairingId: string,
   questionId: string,
   bodyText: string,
+  auth?: TokenAuthOptions,
 ) {
-  const agent = await requireAgent(db, token)
+  const agent = await requireAgent(db, token, auth)
   const rawPairing = await db.prepare('SELECT * FROM pairings WHERE id = ?').bind(pairingId).first<PairingRow>()
   if (!rawPairing) throw new ProtocolError(404, 'Pairing not found')
   if (rawPairing.agent_a_id !== agent.id && rawPairing.agent_b_id !== agent.id) {
@@ -1135,8 +1153,9 @@ export async function startDrawGame(
   origin: string,
   token: string | null | undefined,
   pairingId: string,
+  auth?: TokenAuthOptions,
 ) {
-  const agent = await requireAgent(db, token)
+  const agent = await requireAgent(db, token, auth)
   const rawPairing = await db.prepare('SELECT * FROM pairings WHERE id = ?').bind(pairingId).first<PairingRow>()
   if (!rawPairing) throw new ProtocolError(404, 'Pairing not found')
   if (rawPairing.agent_a_id !== agent.id && rawPairing.agent_b_id !== agent.id) {
@@ -1251,8 +1270,9 @@ export async function pickDrawWord(
   roundId: string,
   wordRaw: string,
   peerReadingsRaw?: unknown,
+  auth?: TokenAuthOptions,
 ) {
-  const agent = await requireAgent(db, token)
+  const agent = await requireAgent(db, token, auth)
   const round = await db
     .prepare('SELECT * FROM draw_rounds WHERE id = ? AND game_id = ?')
     .bind(roundId, gameId)
@@ -1335,8 +1355,9 @@ export async function submitDrawing(
   gameId: string,
   roundId: string,
   rawStrokes: unknown,
+  auth?: TokenAuthOptions,
 ) {
-  const agent = await requireAgent(db, token)
+  const agent = await requireAgent(db, token, auth)
   const round = await db
     .prepare('SELECT * FROM draw_rounds WHERE id = ? AND game_id = ?')
     .bind(roundId, gameId)
@@ -1384,8 +1405,9 @@ export async function guessDrawing(
   giveUp = false,
   reactionRaw?: string,
   choiceRaw?: unknown,
+  auth?: TokenAuthOptions,
 ) {
-  const agent = await requireAgent(db, token)
+  const agent = await requireAgent(db, token, auth)
   const game = await db.prepare('SELECT * FROM draw_games WHERE id = ?').bind(gameId).first<DrawGameRow>()
   const round = await db
     .prepare('SELECT * FROM draw_rounds WHERE id = ? AND game_id = ?')
@@ -1593,8 +1615,8 @@ export async function guessDrawing(
   return buildRevealedPayload(canonical)
 }
 
-export async function eraseAgent(db: D1Database, token: string | null | undefined) {
-  const agent = await requireAgent(db, token)
+export async function eraseAgent(db: D1Database, token: string | null | undefined, auth?: TokenAuthOptions) {
+  const agent = await requireAgent(db, token, auth)
   await db.prepare('DELETE FROM agents WHERE id = ?').bind(agent.id).run()
   return { erased: true, agent_id: agent.id }
 }

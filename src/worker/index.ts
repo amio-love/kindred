@@ -8,27 +8,41 @@ import {
 } from './agentDiscovery'
 import type { Env } from './env'
 import { createMcpRoutes } from './mcp'
+import {
+  buildAuthorizationServerMetadata,
+  buildProtectedResourceMetadata,
+  createOAuthRoutes,
+} from './oauth'
 import { createProtocolRoutes } from './routes/protocol'
 
 const app = new Hono<{ Bindings: Env }>({ strict: false })
 
-app.use(
-  '*',
-  cors({
-    origin: '*',
-    allowMethods: ['GET', 'HEAD', 'POST', 'DELETE', 'OPTIONS'],
-    allowHeaders: [
-      'Content-Type',
-      'Authorization',
-      'Accept',
-      'Mcp-Session-Id',
-      'Mcp-Protocol-Version',
-      'Last-Event-ID',
-      'Range',
-    ],
-    exposeHeaders: ['Content-Range', 'Accept-Ranges', 'Content-Length', 'Mcp-Session-Id'],
-  }),
-)
+const publicCors = cors({
+  origin: '*',
+  allowMethods: ['GET', 'HEAD', 'POST', 'DELETE', 'OPTIONS'],
+  allowHeaders: [
+    'Content-Type',
+    'Authorization',
+    'Accept',
+    'Mcp-Session-Id',
+    'Mcp-Protocol-Version',
+    'Last-Event-ID',
+    'Range',
+  ],
+  exposeHeaders: ['Content-Range', 'Accept-Ranges', 'Content-Length', 'Mcp-Session-Id', 'WWW-Authenticate'],
+})
+
+app.use('/mcp', publicCors)
+app.use('/mcp/*', publicCors)
+app.use('/api/*', publicCors)
+app.use('/.well-known/*', publicCors)
+app.use('/oauth/register', publicCors)
+app.use('/oauth/token', publicCors)
+app.use('/oauth/revoke', publicCors)
+app.use('/skill.md', publicCors)
+app.use('/llms.txt', publicCors)
+app.use('/img/*', publicCors)
+app.use('/media/*', publicCors)
 
 function buildMarkdownSkillResponse(
   origin: string,
@@ -51,6 +65,31 @@ function parseLocaleParam(url: URL): 'zh' | 'en' | undefined {
   return raw === 'zh' || raw === 'en' ? raw : undefined
 }
 
+function buildWellKnownJsonResponse(isHead: boolean, payload: unknown): Response {
+  return new Response(isHead ? null : JSON.stringify(payload, null, 2), {
+    status: 200,
+    headers: {
+      'Content-Type': 'application/json; charset=utf-8',
+      'Cache-Control': 'no-store',
+    },
+  })
+}
+
+app.on(['GET', 'HEAD'], '/.well-known/oauth-protected-resource', (c) => {
+  const origin = new URL(c.req.url).origin
+  return buildWellKnownJsonResponse(c.req.method === 'HEAD', buildProtectedResourceMetadata(origin))
+})
+
+app.on(['GET', 'HEAD'], '/.well-known/oauth-protected-resource/mcp', (c) => {
+  const origin = new URL(c.req.url).origin
+  return buildWellKnownJsonResponse(c.req.method === 'HEAD', buildProtectedResourceMetadata(origin))
+})
+
+app.on(['GET', 'HEAD'], '/.well-known/oauth-authorization-server', (c) => {
+  const origin = new URL(c.req.url).origin
+  return buildWellKnownJsonResponse(c.req.method === 'HEAD', buildAuthorizationServerMetadata(origin))
+})
+
 app.on(['GET', 'HEAD'], '/.well-known/mcp.json', (c) => {
   const origin = new URL(c.req.url).origin
   const manifest = {
@@ -64,11 +103,11 @@ app.on(['GET', 'HEAD'], '/.well-known/mcp.json', (c) => {
     transport: 'streamable-http',
     transports: ['streamable-http'],
     auth: {
-      type: 'optional-bearer',
-      bootstrap: 'none',
-      header: 'Authorization',
-      scheme: 'Bearer',
-      query_param: 'token',
+      type: 'oauth2',
+      mode: 'anonymous-one-click',
+      protected_resource_metadata: `${origin}/.well-known/oauth-protected-resource`,
+      authorization_server_metadata: `${origin}/.well-known/oauth-authorization-server`,
+      scopes: ['kindred'],
     },
     capabilities: {
       tools: true,
@@ -77,13 +116,7 @@ app.on(['GET', 'HEAD'], '/.well-known/mcp.json', (c) => {
     },
     documentation: `${origin}/skill.md`,
   }
-  return new Response(c.req.method === 'HEAD' ? null : JSON.stringify(manifest, null, 2), {
-    status: 200,
-    headers: {
-      'Content-Type': 'application/json; charset=utf-8',
-      'Cache-Control': 'no-store',
-    },
-  })
+  return buildWellKnownJsonResponse(c.req.method === 'HEAD', manifest)
 })
 
 app.on(['GET', 'HEAD'], '/skill.md', (c) => {
@@ -200,9 +233,11 @@ app.on(['GET', 'HEAD'], '/media/*', async (c) => {
 })
 
 app.route('/mcp', createMcpRoutes())
+app.route('/oauth', createOAuthRoutes())
 app.route('/api', createProtocolRoutes())
 
 app.all('/mcp/*', (c) => c.notFound())
+app.all('/oauth/*', (c) => c.notFound())
 app.all('/.well-known/*', (c) => c.notFound())
 app.all('/api', (c) => c.notFound())
 app.all('/api/*', (c) => c.notFound())

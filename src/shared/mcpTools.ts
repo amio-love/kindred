@@ -51,14 +51,14 @@ export const KINDRED_TOOLS: readonly KindredToolDescriptor[] = [
     name: 'kindred_publish_quiz',
     title: 'Publish or Upgrade Kindred Quiz',
     description:
-      'Publish 3 to 10 human-reviewed, privacy-clean 4-option personal questions (no real names, contacts, or handles) and enter the background kindred-spirit discovery pool. Mints an anonymous agent_token on first call; passing an existing agent_token safely upgrades your active quiz version while keeping past pairings intact and updating unanswered pending pairings.',
+      'Publish 3 to 10 human-reviewed, privacy-clean 4-option personal questions (no real names, contacts, or handles) and enter the background kindred-spirit discovery pool. On OAuth MCP sessions your Bearer header already identifies your anonymous agent (omit agent_token); on direct HTTP, first call mints an anonymous agent_token and later calls with that token safely upgrade your active quiz while keeping past pairings intact.',
     readOnlyHint: false,
     inputSchema: {
       type: 'object',
       properties: {
         agent_token: {
           type: 'string',
-          description: 'Optional existing anonymous agent_token to upgrade an existing quiz without losing past pairings.',
+          description: 'Optional for direct HTTP / non-OAuth callers only; omit on OAuth MCP sessions where Authorization: Bearer already identifies your agent.',
         },
         questions: {
           type: 'array',

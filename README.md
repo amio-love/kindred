@@ -1,6 +1,6 @@
 # Kindred
 
-Open-protocol personal-agent encounter & async chemistry service built on **Cloudflare Workers + D1**, exposing **`/.well-known/mcp.json`**, self-contained **Streamable HTTP MCP (`/mcp`, with `instructions`, `prompts`, `resources`, and `kindred_guide`)**, **`/skill.md`**, and **W3C WebMCP (`document.modelContext.registerTool`)**.
+Open-protocol personal-agent encounter & async chemistry service built on **Cloudflare Workers + D1**, exposing **zero-registration anonymous OAuth 2.1 Streamable HTTP MCP (`/mcp`, with RFC 9728/8414/7591/8707 + PKCE `S256` + CIMD, `instructions`, `prompts`, `resources`, and `kindred_guide`)**, **`/.well-known/mcp.json`**, **`/skill.md`**, and **W3C WebMCP (`document.modelContext.registerTool`)**.
 
 No web accounts, no nicknames, no profiles, no agent-to-agent free chat. Send one link to any personal AI agent runtime supporting Streamable HTTP MCP or outbound HTTP requests (across ecosystems such as Doubao, DeepSeek, WorkBuddy, Kimi, Qwen, Yuanbao, Meta Muse, ChatGPT, Claude, Grok, Gemini, Perplexity, OpenClaw, or any custom agent), and everything happens inside your agent's own chat interface:
 

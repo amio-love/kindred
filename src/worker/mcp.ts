@@ -1,4 +1,4 @@
-import { Hono } from 'hono'
+import { Hono, type Context } from 'hono'
 import { KINDRED_TOOLS } from '../shared/mcpTools'
 import { sampleQuizSeeds } from '../shared/quizSeeds'
 import {
@@ -7,7 +7,9 @@ import {
   renderSkillMarkdown,
   renderUpgradePrompt,
 } from '../shared/skillTemplate'
+import { getAgentByToken } from './db'
 import { extractBearerToken, type Env } from './env'
+import { buildWwwAuthenticateHeader } from './oauth'
 import {
   ProtocolError,
   eraseAgent,
@@ -44,14 +46,16 @@ function rpcError(id: string | number | null | undefined, code: number, message:
 async function dispatchToolCall(
   db: D1Database,
   origin: string,
-  headerToken: string | null,
+  authenticatedToken: string,
+  authOptions: { allowOAuth: boolean; expectedResource: string },
   name: string,
   args: Record<string, unknown>,
 ) {
-  const token =
-    typeof args.agent_token === 'string' && args.agent_token.trim()
-      ? args.agent_token.trim()
-      : headerToken
+  const argToken = typeof args.agent_token === 'string' && args.agent_token.trim() ? args.agent_token.trim() : null
+  if (argToken && argToken !== authenticatedToken) {
+    throw new ProtocolError(403, 'agent_token argument does not match the authenticated MCP session')
+  }
+  const token = authenticatedToken
 
   switch (name) {
     case 'kindred_guide': {
@@ -74,18 +78,19 @@ async function dispatchToolCall(
         count: typeof args.count === 'number' ? args.count : undefined,
       })
     case 'kindred_publish_quiz':
-      return publishQuiz(db, origin, token, args.questions)
+      return publishQuiz(db, origin, token, args.questions, authOptions)
     case 'kindred_inbox':
       return getInbox(db, origin, token, {
         maxNew: typeof args.max_new === 'number' ? args.max_new : undefined,
         dailyLimit: typeof args.daily_limit === 'number' ? args.daily_limit : undefined,
+        auth: authOptions,
       })
     case 'kindred_answer_quiz':
-      return submitAgentAnswers(db, token, String(args.pairing_id ?? ''), args.answers)
+      return submitAgentAnswers(db, token, String(args.pairing_id ?? ''), args.answers, authOptions)
     case 'kindred_submit_human_answers':
-      return submitHumanAnswers(db, origin, token, String(args.pairing_id ?? ''), args.answers)
+      return submitHumanAnswers(db, origin, token, String(args.pairing_id ?? ''), args.answers, authOptions)
     case 'kindred_get_reveal':
-      return getPairingReveal(db, origin, token, String(args.pairing_id ?? ''))
+      return getPairingReveal(db, origin, token, String(args.pairing_id ?? ''), authOptions)
     case 'kindred_post_note':
       return postAnchorNote(
         db,
@@ -93,9 +98,10 @@ async function dispatchToolCall(
         String(args.pairing_id ?? ''),
         String(args.question_id ?? ''),
         String(args.body ?? ''),
+        authOptions,
       )
     case 'kindred_start_draw':
-      return startDrawGame(db, origin, token, String(args.pairing_id ?? ''))
+      return startDrawGame(db, origin, token, String(args.pairing_id ?? ''), authOptions)
     case 'kindred_pick_word':
       return pickDrawWord(
         db,
@@ -105,6 +111,7 @@ async function dispatchToolCall(
         String(args.round_id ?? ''),
         String(args.word ?? ''),
         args.peer_readings ?? args.surface_decoys,
+        authOptions,
       )
     case 'kindred_submit_drawing':
       return submitDrawing(
@@ -114,6 +121,7 @@ async function dispatchToolCall(
         String(args.game_id ?? ''),
         String(args.round_id ?? ''),
         args.strokes,
+        authOptions,
       )
     case 'kindred_guess_drawing':
       return guessDrawing(
@@ -126,9 +134,10 @@ async function dispatchToolCall(
         Boolean(args.give_up),
         typeof args.reaction === 'string' ? args.reaction : undefined,
         args.choice,
+        authOptions,
       )
     case 'kindred_erase':
-      return eraseAgent(db, token)
+      return eraseAgent(db, token, authOptions)
     default:
       throw new ProtocolError(404, `Unknown tool: ${name}`)
   }
@@ -137,7 +146,8 @@ async function dispatchToolCall(
 async function handleRpcItem(
   db: D1Database,
   origin: string,
-  headerToken: string | null,
+  authenticatedToken: string,
+  authOptions: { allowOAuth: boolean; expectedResource: string },
   raw: unknown,
 ): Promise<{ status?: 200 | 400 | 404; payload: Record<string, unknown> | null }> {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
@@ -166,7 +176,7 @@ async function handleRpcItem(
         },
         serverInfo: {
           name: 'kindred',
-          version: '2.3.0',
+          version: '2.4.0',
         },
         instructions: renderMcpInstructions(origin),
       }),
@@ -311,7 +321,7 @@ async function handleRpcItem(
         : {}
 
     try {
-      const payload = await dispatchToolCall(db, origin, headerToken, name, args)
+      const payload = await dispatchToolCall(db, origin, authenticatedToken, authOptions, name, args)
       return {
         payload: rpcResult(req.id, {
           content: [{ type: 'text', text: JSON.stringify(payload, null, 2) }],
@@ -337,16 +347,66 @@ async function handleRpcItem(
   return { status: 404, payload: rpcError(req.id, -32601, `Method not found: ${req.method}`) }
 }
 
+async function authenticateMcpRequest(
+  c: Context<{ Bindings: Env }>,
+): Promise<{ token: string; origin: string; authOptions: { allowOAuth: boolean; expectedResource: string } } | Response> {
+  const url = new URL(c.req.url)
+  const origin = url.origin
+  const expectedResource = `${origin.replace(/\/+$/, '')}/mcp`
+  const bearerToken = extractBearerToken(c.req.header('Authorization'))
+  const queryToken = url.searchParams.get('token')?.trim() ?? null
+  const rawToken = bearerToken ?? queryToken
+  const allowOAuth = Boolean(bearerToken)
+  if (!rawToken) {
+    return c.json(
+      {
+        error: 'unauthorized',
+        error_description: 'Connect via Kindred anonymous OAuth 2.1 or pass a valid Bearer token.',
+      },
+      401,
+      {
+        'WWW-Authenticate': buildWwwAuthenticateHeader(origin),
+        'Cache-Control': 'no-store',
+      },
+    )
+  }
+  const authOptions = { allowOAuth, expectedResource }
+  const agent = await getAgentByToken(c.env.DB, rawToken, authOptions)
+  if (!agent) {
+    return c.json(
+      {
+        error: 'invalid_token',
+        error_description: 'Access token is invalid, expired, or revoked.',
+      },
+      401,
+      {
+        'WWW-Authenticate': buildWwwAuthenticateHeader(
+          origin,
+          'invalid_token',
+          'Access token is invalid, expired, or revoked',
+        ),
+        'Cache-Control': 'no-store',
+      },
+    )
+  }
+  return { token: rawToken, origin, authOptions }
+}
+
 export function createMcpRoutes() {
   const app = new Hono<{ Bindings: Env }>({ strict: false })
 
-  app.get('/', (c) => {
+  app.get('/', async (c) => {
+    const auth = await authenticateMcpRequest(c)
+    if (auth instanceof Response) return auth
     c.header('Allow', 'POST, OPTIONS')
     return c.text('Method Not Allowed: send JSON-RPC requests via POST /mcp', 405)
   })
 
   app.post('/', async (c) => {
     c.header('Cache-Control', 'no-store')
+    const auth = await authenticateMcpRequest(c)
+    if (auth instanceof Response) return auth
+
     let raw: unknown
     try {
       raw = JSON.parse(await c.req.text())
@@ -357,17 +417,13 @@ export function createMcpRoutes() {
       return c.json(rpcError(null, -32600, 'Invalid JSON-RPC request'), 400)
     }
 
-    const url = new URL(c.req.url)
-    const origin = url.origin
-    const headerToken = extractBearerToken(c.req.header('Authorization')) ?? url.searchParams.get('token')
-
     if (Array.isArray(raw)) {
       if (raw.length === 0) {
         return c.json(rpcError(null, -32600, 'Invalid empty JSON-RPC batch'), 400)
       }
       const responses: Array<Record<string, unknown>> = []
       for (const item of raw) {
-        const res = await handleRpcItem(c.env.DB, origin, headerToken, item)
+        const res = await handleRpcItem(c.env.DB, auth.origin, auth.token, auth.authOptions, item)
         if (res.payload !== null) {
           responses.push(res.payload)
         }
@@ -378,7 +434,7 @@ export function createMcpRoutes() {
       return c.json(responses)
     }
 
-    const single = await handleRpcItem(c.env.DB, origin, headerToken, raw)
+    const single = await handleRpcItem(c.env.DB, auth.origin, auth.token, auth.authOptions, raw)
     if (single.payload === null) {
       return c.body(null, 202)
     }
