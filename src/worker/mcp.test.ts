@@ -443,10 +443,23 @@ describe('Streamable HTTP MCP, anonymous OAuth 2.1, CORS, and route boundary com
       env,
     )
     const preInboxBody = (await prePublishInbox.json()) as {
-      result?: { isError?: boolean; structuredContent?: { agent_id?: string; quiz_ready?: boolean; next_step?: string } }
+      result?: {
+        isError?: boolean
+        structuredContent?: {
+          agent_id?: string
+          quiz_ready?: boolean
+          my_quiz?: unknown
+          pool_status?: { in_pool?: boolean }
+          opening_sparks?: unknown[]
+          next_step?: string
+        }
+      }
     }
     assert.equal(preInboxBody.result?.isError, false)
     assert.equal(preInboxBody.result?.structuredContent?.quiz_ready, false)
+    assert.equal(preInboxBody.result?.structuredContent?.my_quiz, null)
+    assert.equal(preInboxBody.result?.structuredContent?.pool_status?.in_pool, false)
+    assert.equal(preInboxBody.result?.structuredContent?.opening_sparks?.length, 8)
     assert.ok(preInboxBody.result?.structuredContent?.next_step?.includes('kindred_publish_quiz'))
     const oauthAgentId = preInboxBody.result?.structuredContent?.agent_id
     assert.ok(oauthAgentId)
@@ -560,17 +573,34 @@ describe('Streamable HTTP MCP, anonymous OAuth 2.1, CORS, and route boundary com
           jsonrpc: '2.0',
           id: 26,
           method: 'tools/call',
-          params: { name: 'kindred_inbox', arguments: {} },
+          params: { name: 'kindred_inbox', arguments: { max_new: 0 } },
         }),
       },
       env,
     )
     const newInboxBody = (await newTokenInbox.json()) as {
-      result?: { structuredContent?: { agent_id?: string; current_quiz_version?: number; quiz_ready?: boolean } }
+      result?: {
+        structuredContent?: {
+          agent_id?: string
+          current_quiz_version?: number
+          quiz_ready?: boolean
+          my_quiz?: {
+            quiz_version?: number
+            published_count?: number
+            questions?: Array<{ prompt: string; owner_choice: string }>
+          }
+          pool_status?: { in_pool?: boolean; quiz_version?: number; published_count?: number }
+        }
+      }
     }
     assert.equal(newInboxBody.result?.structuredContent?.agent_id, oauthAgentId)
     assert.equal(newInboxBody.result?.structuredContent?.current_quiz_version, 2)
     assert.equal(newInboxBody.result?.structuredContent?.quiz_ready, true)
+    assert.equal(newInboxBody.result?.structuredContent?.my_quiz?.quiz_version, 2)
+    assert.equal(newInboxBody.result?.structuredContent?.my_quiz?.published_count, 3)
+    assert.equal(newInboxBody.result?.structuredContent?.my_quiz?.questions?.[0]?.prompt, 'oauth-v2 evening habit question 1?')
+    assert.equal(newInboxBody.result?.structuredContent?.pool_status?.in_pool, true)
+    assert.equal(newInboxBody.result?.structuredContent?.pool_status?.published_count, 3)
 
     const replayRefresh = await app.request(
       'https://kindred.example.test/oauth/token',
@@ -746,6 +776,16 @@ describe('Streamable HTTP MCP, anonymous OAuth 2.1, CORS, and route boundary com
       env,
     )
     assert.equal(oauthInQueryRejected.status, 401)
+
+    const oauthOnDirectQuizRejected = await app.request(
+      'https://kindred.example.test/api/quiz',
+      {
+        method: 'GET',
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      },
+      env,
+    )
+    assert.equal(oauthOnDirectQuizRejected.status, 401)
 
     const oauthOnDirectApiRejected = await app.request(
       'https://kindred.example.test/api/agent',
@@ -962,6 +1002,241 @@ describe('Streamable HTTP MCP, anonymous OAuth 2.1, CORS, and route boundary com
     assert.equal(legacyUpgradeBody.result?.structuredContent?.agent_id, legacyQuiz.agent_id)
     assert.equal(legacyUpgradeBody.result?.structuredContent?.quiz_version, 2)
     assert.equal(legacyUpgradeBody.result?.structuredContent?.mcp_url, 'https://kindred.example.test/mcp')
+
+    const legacyReadBackRes = await app.request(
+      'https://kindred.example.test/api/quiz',
+      {
+        method: 'GET',
+        headers: { Authorization: `Bearer ${legacyQuiz.agent_token}` },
+      },
+      env,
+    )
+    assert.equal(legacyReadBackRes.status, 200)
+    assert.equal(legacyReadBackRes.headers.get('Cache-Control'), 'no-store')
+    const legacyReadBack = (await legacyReadBackRes.json()) as {
+      agent_id: string
+      quiz_version: number
+      published_count: number
+      questions: Array<{ prompt: string; owner_choice: string }>
+    }
+    assert.equal(legacyReadBack.agent_id, legacyQuiz.agent_id)
+    assert.equal(legacyReadBack.quiz_version, 2)
+    assert.equal(legacyReadBack.published_count, 3)
+    assert.equal(legacyReadBack.questions[0]?.prompt, 'legacy-v2 evening habit question 1?')
+  })
+
+  test('inbox surfaces waiting pool_status, partner notes, and revealed Phase 2 draw rounds in partner_updates without swallowing completions', async () => {
+    const env = makeEnv()
+
+    const pubARes = await app.request(
+      'https://kindred.example.test/api/quiz',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ questions: sampleQuestions('alpha') }),
+      },
+      env,
+    )
+    assert.equal(pubARes.status, 201)
+    const agentA = (await pubARes.json()) as { agent_id: string; agent_token: string }
+
+    const pubBRes = await app.request(
+      'https://kindred.example.test/api/quiz',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ questions: sampleQuestions('beta') }),
+      },
+      env,
+    )
+    assert.equal(pubBRes.status, 201)
+    const agentB = (await pubBRes.json()) as {
+      agent_id: string
+      agent_token: string
+      initial_quiz: { pairing_id: string; questions: Array<{ id: string }> }
+    }
+    const pairingId = agentB.initial_quiz.pairing_id
+
+    const inboxAPending = (await (
+      await app.request('https://kindred.example.test/api/inbox?max_new=0', {
+        headers: { Authorization: `Bearer ${agentA.agent_token}` },
+      }, env)
+    ).json()) as { pending_quizzes: Array<{ pairing_id: string; questions: Array<{ id: string }> }> }
+    assert.equal(inboxAPending.pending_quizzes.length, 1)
+
+    await app.request(
+      `https://kindred.example.test/api/pairings/${pairingId}/agent-answers`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${agentA.agent_token}` },
+        body: JSON.stringify({
+          answers: inboxAPending.pending_quizzes[0]!.questions.map((q) => ({ question_id: q.id, choice: 'U' })),
+        }),
+      },
+      env,
+    )
+
+    const inboxAWaitingAgent = (await (
+      await app.request('https://kindred.example.test/api/inbox?max_new=0', {
+        headers: { Authorization: `Bearer ${agentA.agent_token}` },
+      }, env)
+    ).json()) as { pool_status: { waiting_on_partner_agent_count: number; waiting_on_partner_human_count: number } }
+    assert.equal(inboxAWaitingAgent.pool_status.waiting_on_partner_agent_count, 1)
+
+    const myQuizA = (await (
+      await app.request('https://kindred.example.test/api/quiz', {
+        headers: { Authorization: `Bearer ${agentA.agent_token}` },
+      }, env)
+    ).json()) as { questions: Array<{ id: string; owner_choice: string }> }
+
+    await app.request(
+      `https://kindred.example.test/api/pairings/${pairingId}/agent-answers`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${agentB.agent_token}` },
+        body: JSON.stringify({
+          answers: myQuizA.questions.map((q) => ({ question_id: q.id, choice: q.owner_choice })),
+        }),
+      },
+      env,
+    )
+
+    const inboxAMatchReady = (await (
+      await app.request('https://kindred.example.test/api/inbox?max_new=0', {
+        headers: { Authorization: `Bearer ${agentA.agent_token}` },
+      }, env)
+    ).json()) as {
+      ready_for_human: Array<{ pairing_id: string; questions: Array<{ id: string }> }>
+      partner_updates: Array<{ kind: string; pairing_id: string }>
+    }
+    assert.equal(inboxAMatchReady.partner_updates.some((u) => u.kind === 'match_ready' && u.pairing_id === pairingId), true)
+
+    await app.request(
+      `https://kindred.example.test/api/pairings/${pairingId}/human-answers`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${agentA.agent_token}` },
+        body: JSON.stringify({
+          answers: inboxAMatchReady.ready_for_human[0]!.questions.map((q) => ({ question_id: q.id, choice: 'A' })),
+        }),
+      },
+      env,
+    )
+
+    const inboxAWaitingHuman = (await (
+      await app.request('https://kindred.example.test/api/inbox?max_new=0', {
+        headers: { Authorization: `Bearer ${agentA.agent_token}` },
+      }, env)
+    ).json()) as { pool_status: { waiting_on_partner_human_count: number } }
+    assert.equal(inboxAWaitingHuman.pool_status.waiting_on_partner_human_count, 1)
+
+    await app.request(
+      `https://kindred.example.test/api/pairings/${pairingId}/human-answers`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${agentB.agent_token}` },
+        body: JSON.stringify({
+          answers: myQuizA.questions.map((q) => ({ question_id: q.id, choice: q.owner_choice })),
+        }),
+      },
+      env,
+    )
+
+    await app.request(
+      `https://kindred.example.test/api/pairings/${pairingId}/notes`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${agentB.agent_token}` },
+        body: JSON.stringify({ question_id: myQuizA.questions[0]!.id, body: 'This scene felt uncannily familiar' }),
+      },
+      env,
+    )
+
+    const startDrawRes = await app.request(
+      `https://kindred.example.test/api/pairings/${pairingId}/draw`,
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${agentA.agent_token}` },
+      },
+      env,
+    )
+    assert.equal(startDrawRes.status, 201)
+    const drawGame = (await startDrawRes.json()) as {
+      game_id: string
+      rounds: Array<{ id: string; role: 'drawer' | 'guesser'; promptOptions?: Array<{ readings: string[] }> }>
+    }
+    const firstRound = drawGame.rounds[0]!
+    const drawerToken = firstRound.role === 'drawer' ? agentA.agent_token : agentB.agent_token
+    const guesserToken = firstRound.role === 'drawer' ? agentB.agent_token : agentA.agent_token
+    const drawerInboxForPrompts = (await (
+      await app.request('https://kindred.example.test/api/inbox?max_new=0', {
+        headers: { Authorization: `Bearer ${drawerToken}` },
+      }, env)
+    ).json()) as { active_draw_turns: Array<{ round: { id: string; promptOptions?: Array<{ readings: string[] }> } }> }
+    const chosenWord = drawerInboxForPrompts.active_draw_turns[0]!.round.promptOptions![0]!.readings[0]!
+
+    await app.request(
+      `https://kindred.example.test/api/draw/${drawGame.game_id}/rounds/${firstRound.id}/word`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${drawerToken}` },
+        body: JSON.stringify({ word: chosenWord }),
+      },
+      env,
+    )
+    await app.request(
+      `https://kindred.example.test/api/draw/${drawGame.game_id}/rounds/${firstRound.id}/drawing`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${drawerToken}` },
+        body: JSON.stringify({
+          strokes: [{ color: '#1F1D1A', width: 5, points: [[100, 120], [240, 220]] }],
+        }),
+      },
+      env,
+    )
+    await app.request(
+      `https://kindred.example.test/api/draw/${drawGame.game_id}/rounds/${firstRound.id}/guess`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${guesserToken}` },
+        body: JSON.stringify({ choice: 'A', reaction: 'Loved this frame' }),
+      },
+      env,
+    )
+
+    const drawerFinalInbox = (await (
+      await app.request('https://kindred.example.test/api/inbox?max_new=0', {
+        headers: { Authorization: `Bearer ${drawerToken}` },
+      }, env)
+    ).json()) as {
+      revealed_pairings: Array<{
+        pairing_id: string
+        latest_note_author: string | null
+        latest_partner_note: { body: string } | null
+      }>
+      recent_draw_reveals: Array<{ round: { id: string; status: string; reaction: string | null } }>
+      partner_updates: Array<{ kind: string; round_id?: string; body?: string }>
+    }
+    assert.equal(drawerFinalInbox.recent_draw_reveals.some((r) => r.round.id === firstRound.id && r.round.status === 'revealed'), true)
+    assert.equal(drawerFinalInbox.partner_updates.some((u) => u.kind === 'draw_revealed' && u.round_id === firstRound.id), true)
+
+    const agentAFinalInbox = (await (
+      await app.request('https://kindred.example.test/api/inbox?max_new=0', {
+        headers: { Authorization: `Bearer ${agentA.agent_token}` },
+      }, env)
+    ).json()) as {
+      revealed_pairings: Array<{
+        pairing_id: string
+        latest_note_author: string | null
+        latest_partner_note: { body: string } | null
+      }>
+      partner_updates: Array<{ kind: string; body?: string }>
+    }
+    assert.equal(agentAFinalInbox.revealed_pairings[0]?.latest_note_author, 'partner')
+    assert.equal(agentAFinalInbox.revealed_pairings[0]?.latest_partner_note?.body, 'This scene felt uncannily familiar')
+    assert.equal(agentAFinalInbox.partner_updates.some((u) => u.kind === 'partner_note' && u.body === 'This scene felt uncannily familiar'), true)
+    assert.equal(agentAFinalInbox.partner_updates.some((u) => u.kind === 'pairing_revealed'), true)
   })
 
   test('GET /skill.md, /llms.txt, /.well-known/mcp.json return expected docs while malformed/unknown paths return 404 instead of SPA HTML', async () => {
@@ -979,7 +1254,7 @@ describe('Streamable HTTP MCP, anonymous OAuth 2.1, CORS, and route boundary com
       assert.ok(text.includes('Step 0: Preferred Transport'))
       assert.ok(text.includes('kindred_guide'))
       assert.ok(text.includes('Session Scenario Sparks'))
-      assert.ok(text.includes('Upgrading an existing quiz'))
+      assert.ok(text.includes('GET https://kindred.example.test/api/quiz'))
       assert.ok(!text.includes('even with no extra message'))
       assert.ok(!text.includes('initiate adding this MCP server yourself'))
     }

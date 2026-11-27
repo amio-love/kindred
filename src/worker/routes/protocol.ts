@@ -4,6 +4,7 @@ import {
   ProtocolError,
   eraseAgent,
   getInbox,
+  getMyQuiz,
   getPairingReveal,
   getQuizSeeds,
   guessDrawing,
@@ -46,6 +47,16 @@ export function createProtocolRoutes() {
     const count = rawCount !== null && Number.isFinite(Number(rawCount)) ? Number(rawCount) : undefined
     c.header('Cache-Control', 'no-store')
     return c.json(getQuizSeeds({ locale, count }))
+  })
+
+  app.get('/quiz', async (c) => {
+    try {
+      c.header('Cache-Control', 'no-store')
+      const res = await getMyQuiz(c.env.DB, resolveToken(c))
+      return c.json(res)
+    } catch (err) {
+      return handleError(c, err)
+    }
   })
 
   app.post('/quiz', async (c) => {

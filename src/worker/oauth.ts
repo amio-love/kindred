@@ -570,7 +570,7 @@ function renderOAuthPageShell(locale: 'zh' | 'en', title: string, bodyHtml: stri
     .points {
       list-style: none;
       padding: 0;
-      margin: 0 0 22px;
+      margin: 0 0 18px;
       display: grid;
       gap: 9px;
     }
@@ -586,6 +586,20 @@ function renderOAuthPageShell(locale: 'zh' | 'en', title: string, bodyHtml: stri
       color: var(--moss);
       font-weight: 700;
       line-height: 1.5;
+    }
+    .next-step {
+      padding: 11px 13px;
+      border-radius: 12px;
+      background: rgba(255, 107, 71, 0.09);
+      border: 1px solid rgba(255, 107, 71, 0.24);
+      margin-bottom: 18px;
+      font-size: 13px;
+      color: var(--text);
+      line-height: 1.55;
+    }
+    .next-step strong {
+      color: #ff9a7f;
+      font-weight: 600;
     }
     .actions {
       display: grid;
@@ -652,37 +666,42 @@ function renderConsentHtml(params: {
   const zh = locale === 'zh'
   const title = zh ? '连接 Kindred — 匿名授权' : 'Connect Kindred — Anonymous Access'
   const bodyHtml = `
-    <div class="pill"><span class="dot"></span><span>${zh ? '零注册 · 匿名会话' : 'No sign-up · Anonymous session'}</span></div>
-    <h1>${zh ? '批准你的 AI 连接 Kindred' : 'Allow your AI to connect to Kindred'}</h1>
+    <div class="pill"><span class="dot"></span><span>${zh ? '无需注册 · 匿名' : 'No sign-up · Anonymous'}</span></div>
+    <h1>${zh ? '允许你的 AI 连上 Kindred' : 'Connect your AI to Kindred'}</h1>
     <p class="sub">${
       zh
-        ? '这次授权会生成一个匿名的 Kindred 会话令牌并交给你的 AI 凭据库，之后跨对话不用再反复配置。'
-        : 'This creates a fresh anonymous Kindred token for your AI’s credential store so future chats stay connected seamlessly.'
+        ? '连上后，你的 AI 就能匿名帮你发题、匹配同频的人；下次新开对话也无需重连。'
+        : 'Once connected, your AI can publish your quiz and find kindred spirits anonymously—across future chats too.'
     }</p>
     <div class="client-box">
       <div class="client-name">${escapeHtml(clientName)}</div>
-      <div class="client-host">${zh ? '回调域名：' : 'Callback host: '}${escapeHtml(redirectHost)}</div>
+      <div class="client-host">${zh ? '回调地址：' : 'Redirects to '}${escapeHtml(redirectHost)}</div>
     </div>
     <ul class="points">
       <li><span class="check">✓</span><span>${
-        zh ? '无需注册账号，不收集邮箱、手机号或个人资料' : 'No account needed — zero email, phone, or profile collected'
+        zh ? '不用注册，不留邮箱、手机号或个人资料' : 'No account—no email, phone number, or profile collected'
       }</span></li>
       <li><span class="check">✓</span><span>${
-        zh ? '聊天记录与记忆留在本地，仅发送你确认过的题与画' : 'Chats and memories stay local — only your reviewed quizzes and drawings leave'
+        zh ? '聊天和记忆留在本地，只发你确认的题和画' : 'Chats and memories stay local; only your reviewed quizzes and drawings leave'
       }</span></li>
       <li><span class="check">✓</span><span>${
-        zh ? '随时可以让 AI 一键清空全部数据并吊销令牌' : 'Erase all data and revoke access anytime through your AI'
+        zh ? '随时让 AI 清空全部数据并断开连接' : 'Erase all data and disconnect anytime through your AI'
       }</span></li>
     </ul>
+    <div class="next-step">${
+      zh
+        ? '<strong>下一步：</strong>点完会自动回对话；如果 AI 没接着出题，发一句「开始玩 Kindred」就能继续。'
+        : '<strong>Next step:</strong> You’ll return to your chat automatically. If your AI stays quiet, send “Start Kindred” to jump in.'
+    }</div>
     <form method="POST" action="/oauth/authorize" class="actions">
       <input type="hidden" name="request_id" value="${escapeHtml(requestId)}" />
       <input type="hidden" name="csrf_token" value="${escapeHtml(csrfToken)}" />
       <button type="submit" name="decision" value="approve" class="btn-primary">${
-        zh ? '批准并匿名连接' : 'Approve & Connect Anonymously'
+        zh ? '匿名连接' : 'Connect Anonymously'
       }</button>
       <button type="submit" name="decision" value="deny" class="btn-secondary">${zh ? '取消' : 'Cancel'}</button>
     </form>
-    <div class="foot">${zh ? 'Kindred · AMIO 开放协议' : 'Kindred · Open protocol by AMIO'}</div>
+    <div class="foot">${zh ? 'Kindred · AMIO 出品' : 'Kindred · by AMIO'}</div>
   `
   return renderOAuthPageShell(locale, title, bodyHtml, toggleHref)
 }

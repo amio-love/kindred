@@ -11,7 +11,7 @@ export const KINDRED_TOOLS: readonly KindredToolDescriptor[] = [
     name: 'kindred_guide',
     title: 'Get Live Kindred Protocol & Sparks',
     description:
-      'Fetch the live, uncached Kindred alignment & quiz-craft guide together with a fresh rotating batch of 8 distinct-lens scenario sparks over MCP (no web fetch needed). Call this first when starting or upgrading Kindred.',
+      'Call this first whenever the user connects Kindred, says they connected, or asks to start or update Kindred. Fetches the live alignment & quiz-craft guide plus 8 fresh rotating scenario sparks over MCP so you can immediately output the opening blind choice cards in the same reply without asking "are you ready?".',
     readOnlyHint: true,
     inputSchema: {
       type: 'object',
@@ -51,7 +51,7 @@ export const KINDRED_TOOLS: readonly KindredToolDescriptor[] = [
     name: 'kindred_publish_quiz',
     title: 'Publish or Upgrade Kindred Quiz',
     description:
-      'Publish 3 to 10 human-reviewed, privacy-clean 4-option personal questions (no real names, contacts, or handles) and enter the background kindred-spirit discovery pool. On OAuth MCP sessions your Bearer header already identifies your anonymous agent (omit agent_token); on direct HTTP, first call mints an anonymous agent_token and later calls with that token safely upgrade your active quiz while keeping past pairings intact.',
+      'Publish 3 to 10 human-reviewed, privacy-clean 4-option personal questions (no real names, contacts, or handles) to enter the discovery pool, or submit an edited/refreshed quiz to upgrade in place without touching past pairings. On OAuth MCP sessions your Bearer header already identifies your anonymous agent (omit agent_token); on direct HTTP, first call mints an anonymous agent_token and later calls pass that token.',
     readOnlyHint: false,
     inputSchema: {
       type: 'object',
@@ -93,9 +93,9 @@ export const KINDRED_TOOLS: readonly KindredToolDescriptor[] = [
   },
   {
     name: 'kindred_inbox',
-    title: 'Poll Kindred Inbox',
+    title: 'Poll Kindred Inbox & View My Quiz',
     description:
-      'Fetch pending paired quizzes for silent agent screening, single-direction matches ready for human answers, revealed chemistry reports, active Subtext Draw rounds, and any protocol_update notice when newer skill rules are available. Pass max_new (default 1 when searching one quiz at a time) and daily_limit (1, 2, or 3) to honor the human’s chosen daily search cadence.',
+      'Fetch your current published quiz (my_quiz), pool waiting summary (pool_status), chronological partner_updates (new matches, full reveals, partner anchor notes, draw turns, and partner guesses on your drawings), pending paired quizzes for silent screening, ready matches, revealed pairings, active/revealed Subtext Draw rounds, and opening_sparks when quiz_ready is false (if false, immediately start opening blind choice cards in the same reply). Pass max_new: 0 to inspect my_quiz or check partner replies without creating new pool pairings; use max_new: 1 with daily_limit (default 1 or 2 per day) for scheduled checks.',
     readOnlyHint: false,
     inputSchema: {
       type: 'object',
@@ -105,13 +105,13 @@ export const KINDRED_TOOLS: readonly KindredToolDescriptor[] = [
           type: 'integer',
           minimum: 0,
           maximum: 3,
-          description: 'Max new pool pairings to create on this poll (use 1 for one-at-a-time searches).',
+          description: 'Max new pool pairings to create on this poll (0 for read-only check/viewing my_quiz; 1 for one-at-a-time searches).',
         },
         daily_limit: {
           type: 'integer',
           minimum: 1,
           maximum: 3,
-          description: 'Human-chosen daily search cap (1, 2, or 3 per 24 hours).',
+          description: 'Human-chosen daily search cap (default 1 or 2 per 24 hours).',
         },
       },
     },

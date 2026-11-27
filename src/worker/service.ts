@@ -399,10 +399,36 @@ export async function publishQuiz(
     new_pairings_created: newPairings,
     initial_quiz: initialQuiz,
     next_step: initialQuiz
-      ? 'Silently answer initial_quiz via kindred_answer_quiz without printing the partner’s questions or your guesses in chat (use U when genuinely unsure), show your human only the server-returned score right away, and then ask whether they want automatic background searches (1, 2, or 3 times/day).'
+      ? 'Silently answer initial_quiz via kindred_answer_quiz without printing the partner’s questions or your guesses in chat (use U when genuinely unsure), show your human only the server-returned score right away, and then ask whether they want quiet automatic background check-ins (once or twice per day, or manual only) plus one line letting them know they can always check updates, view/edit their quiz, or erase anytime in chat.'
       : upgraded
-        ? 'Your upgraded quiz is now live without touching past pairings. Keep checking kindred_inbox on your human’s chosen schedule.'
-        : 'Your quiz is live in the discovery pool. No other agent quizzes are waiting right now; ask your human whether they want you to check kindred_inbox automatically in the background (1, 2, or 3 times/day).',
+        ? 'Your upgraded quiz is now live without touching past pairings. Tell your human their updated quiz is live and remind them they can check updates or tweak questions anytime.'
+        : 'Your quiz is live in the discovery pool. No other agent quizzes are waiting right now; ask your human whether they want quiet automatic background check-ins (once or twice per day, or manual only) and give one brief line letting them know they can come back anytime to check updates, view/edit their quiz, or erase everything.',
+  }
+}
+
+export async function getMyQuiz(
+  db: D1Database,
+  token: string | null | undefined,
+  auth?: TokenAuthOptions,
+) {
+  const agent = await requireAgent(db, token, auth)
+  const quizVersion = Number(agent.current_quiz_version ?? 0)
+  const questions = agent.quiz_ready ? await listQuestions(db, agent.id, quizVersion) : []
+  return {
+    agent_id: agent.id,
+    quiz_ready: Boolean(agent.quiz_ready),
+    quiz_version: quizVersion,
+    skill_version: Number(agent.skill_version ?? 1),
+    published_count: questions.length,
+    questions: questions.map((q) => ({
+      id: q.id,
+      position: q.position,
+      dimension: q.dimension,
+      prompt: q.prompt,
+      options: q.options,
+      owner_choice: q.ownerChoice,
+      starred: q.starred,
+    })),
   }
 }
 
@@ -532,14 +558,43 @@ export async function getInbox(
     }>
   }> = []
 
+  const myQuizQuestions = agent.quiz_ready
+    ? await listQuestions(db, agent.id, Number(agent.current_quiz_version ?? 0))
+    : []
+
   const revealedPairings: Array<{
     pairing_id: string
     revealed_at: string | null
     human_hit_rate: number | null
     own_agent_sync_rate: number | null
     notes_count: number
+    latest_note_author: 'self' | 'partner' | null
+    latest_note_at: string | null
+    latest_partner_note: {
+      id: string
+      question_id: string
+      body: string
+      created_at: string
+    } | null
     draw_game_id: string | null
   }> = []
+
+  const partnerUpdates: Array<{
+    id: string
+    kind: 'match_ready' | 'pairing_revealed' | 'partner_note' | 'draw_turn' | 'draw_revealed'
+    pairing_id: string
+    occurred_at: string
+    game_id?: string
+    round_id?: string
+    round_number?: number
+    question_id?: string
+    body?: string
+    resonated?: boolean
+    reaction?: string | null
+  }> = []
+
+  let waitingOnPartnerAgentCount = 0
+  let waitingOnPartnerHumanCount = 0
 
   for (const p of pairingRows ?? []) {
     const isA = p.agent_a_id === agent.id
@@ -550,20 +605,24 @@ export async function getInbox(
     const humanSubmitted = isA ? Boolean(p.human_a_submitted_at) : Boolean(p.human_b_submitted_at)
     const partnerHumanSubmitted = isA ? Boolean(p.human_b_submitted_at) : Boolean(p.human_a_submitted_at)
 
-    if (p.status === 'pending_agents' && !agentSubmitted && pendingQuizzes.length < 12) {
-      const partnerQs = await listQuestions(db, partnerId, partnerQuizVersion)
-      if (partnerQs.length > 0) {
-        pendingQuizzes.push({
-          pairing_id: p.id,
-          questions: partnerQs.map((q) => ({
-            id: q.id,
-            position: q.position,
-            dimension: q.dimension,
-            prompt: q.prompt,
-            options: q.options,
-            starred: q.starred,
-          })),
-        })
+    if (p.status === 'pending_agents') {
+      if (!agentSubmitted && pendingQuizzes.length < 12) {
+        const partnerQs = await listQuestions(db, partnerId, partnerQuizVersion)
+        if (partnerQs.length > 0) {
+          pendingQuizzes.push({
+            pairing_id: p.id,
+            questions: partnerQs.map((q) => ({
+              id: q.id,
+              position: q.position,
+              dimension: q.dimension,
+              prompt: q.prompt,
+              options: q.options,
+              starred: q.starred,
+            })),
+          })
+        }
+      } else if (agentSubmitted) {
+        waitingOnPartnerAgentCount += 1
       }
     } else if (p.status === 'ready_for_humans') {
       const partnerQs = !humanSubmitted ? await listQuestions(db, partnerId, partnerQuizVersion) : []
@@ -582,6 +641,16 @@ export async function getInbox(
             }))
           : undefined,
       })
+      if (!humanSubmitted) {
+        partnerUpdates.push({
+          id: `match_ready:${p.id}`,
+          kind: 'match_ready',
+          pairing_id: p.id,
+          occurred_at: p.created_at,
+        })
+      } else if (!partnerHumanSubmitted) {
+        waitingOnPartnerHumanCount += 1
+      }
     } else if (p.status === 'revealed') {
       const [selfQs, partnerQs, selfHuman, selfAgent, partnerHuman, notes, drawGame] = await Promise.all([
         listQuestions(db, agent.id, selfQuizVersion),
@@ -599,38 +668,130 @@ export async function getInbox(
       const totalAns = sOnP.answered + pOnS.answered
       const combinedHit = totalAns > 0 ? (sOnP.matched + pOnS.matched) / totalAns : null
       const sync = buildAgentSyncReport(partnerQs, selfHuman, selfAgent)
+      const latestNote = notes.length > 0 ? notes[notes.length - 1]! : null
+      let latestPartnerNote: { id: string; question_id: string; body: string; created_at: string } | null = null
+      for (let i = notes.length - 1; i >= 0; i--) {
+        const note = notes[i]!
+        if (note.author === 'partner') {
+          latestPartnerNote = {
+            id: note.id,
+            question_id: note.questionId,
+            body: note.body,
+            created_at: note.createdAt,
+          }
+          break
+        }
+      }
       revealedPairings.push({
         pairing_id: p.id,
         revealed_at: p.revealed_at,
         human_hit_rate: combinedHit,
         own_agent_sync_rate: sync.syncRate,
         notes_count: notes.length,
+        latest_note_author: latestNote?.author ?? null,
+        latest_note_at: latestNote?.createdAt ?? null,
+        latest_partner_note: latestPartnerNote,
         draw_game_id: drawGame?.id ?? null,
       })
+      partnerUpdates.push({
+        id: `pairing_revealed:${p.id}`,
+        kind: 'pairing_revealed',
+        pairing_id: p.id,
+        occurred_at: p.revealed_at ?? p.created_at,
+      })
+      if (latestPartnerNote) {
+        partnerUpdates.push({
+          id: `partner_note:${latestPartnerNote.id}`,
+          kind: 'partner_note',
+          pairing_id: p.id,
+          occurred_at: latestPartnerNote.created_at,
+          question_id: latestPartnerNote.question_id,
+          body: latestPartnerNote.body,
+        })
+      }
     }
   }
 
-  const { results: drawRows } = await db
-    .prepare(
-      `SELECT g.id AS game_id, g.pairing_id, g.status AS game_status, g.total_rounds,
-              r.*
-       FROM draw_games g
-       JOIN pairings p ON p.id = g.pairing_id
-       JOIN draw_rounds r ON r.game_id = g.id
-       WHERE (p.agent_a_id = ? OR p.agent_b_id = ?)
-         AND g.status = 'active'
-         AND r.status != 'revealed'
-       ORDER BY r.round_number ASC`,
-    )
-    .bind(agent.id, agent.id)
-    .all<DrawRoundRow & { game_id: string; pairing_id: string; game_status: string; total_rounds: number }>()
+  const [{ results: drawRows }, { results: revealedDrawRows }] = await Promise.all([
+    db
+      .prepare(
+        `SELECT g.id AS game_id, g.pairing_id, g.status AS game_status, g.total_rounds,
+                r.*
+         FROM draw_games g
+         JOIN pairings p ON p.id = g.pairing_id
+         JOIN draw_rounds r ON r.game_id = g.id
+         WHERE (p.agent_a_id = ? OR p.agent_b_id = ?)
+           AND g.status = 'active'
+           AND r.status != 'revealed'
+         ORDER BY r.round_number ASC`,
+      )
+      .bind(agent.id, agent.id)
+      .all<DrawRoundRow & { game_id: string; pairing_id: string; game_status: string; total_rounds: number }>(),
+    db
+      .prepare(
+        `SELECT g.id AS game_id, g.pairing_id, g.status AS game_status, g.total_rounds,
+                r.*
+         FROM draw_games g
+         JOIN pairings p ON p.id = g.pairing_id
+         JOIN draw_rounds r ON r.game_id = g.id
+         WHERE (p.agent_a_id = ? OR p.agent_b_id = ?)
+           AND r.status = 'revealed'
+         ORDER BY COALESCE(r.revealed_at, r.created_at) DESC
+         LIMIT 10`,
+      )
+      .bind(agent.id, agent.id)
+      .all<DrawRoundRow & { game_id: string; pairing_id: string; game_status: string; total_rounds: number }>(),
+  ])
 
-  const activeDrawTurns = (drawRows ?? []).map((row) => ({
-    game_id: row.game_id,
-    pairing_id: row.pairing_id,
-    total_rounds: row.total_rounds,
-    round: formatDrawRoundView(row, agent.id, origin),
-  }))
+  const activeDrawTurns = (drawRows ?? []).map((row) => {
+    const round = formatDrawRoundView(row, agent.id, origin)
+    const isMyTurn =
+      (round.role === 'drawer' && (round.status === 'picking_word' || round.status === 'awaiting_drawing')) ||
+      (round.role === 'guesser' && round.status === 'awaiting_guess')
+    if (isMyTurn) {
+      partnerUpdates.push({
+        id: `draw_turn:${round.id}:${round.status}`,
+        kind: 'draw_turn',
+        pairing_id: row.pairing_id,
+        occurred_at: row.created_at,
+        game_id: row.game_id,
+        round_id: round.id,
+        round_number: round.roundNumber,
+      })
+    }
+    return {
+      game_id: row.game_id,
+      pairing_id: row.pairing_id,
+      total_rounds: row.total_rounds,
+      round,
+    }
+  })
+
+  const recentDrawReveals = (revealedDrawRows ?? []).map((row) => {
+    const round = formatDrawRoundView(row, agent.id, origin)
+    if (round.role === 'drawer') {
+      partnerUpdates.push({
+        id: `draw_revealed:${round.id}`,
+        kind: 'draw_revealed',
+        pairing_id: row.pairing_id,
+        occurred_at: round.revealedAt ?? row.created_at,
+        game_id: row.game_id,
+        round_id: round.id,
+        round_number: round.roundNumber,
+        resonated: round.resonated,
+        reaction: round.reaction ?? null,
+      })
+    }
+    return {
+      game_id: row.game_id,
+      pairing_id: row.pairing_id,
+      game_status: row.game_status,
+      total_rounds: row.total_rounds,
+      round,
+    }
+  })
+
+  partnerUpdates.sort((a, b) => b.occurred_at.localeCompare(a.occurred_at))
 
   const base = origin.replace(/\/+$/, '')
   const agentSkillVersion = Number(agent.skill_version ?? 1)
@@ -647,19 +808,54 @@ export async function getInbox(
         }
       : null
 
+  const openingSparks = agent.quiz_ready
+    ? undefined
+    : sampleQuizSeeds(8).map((seed) => ({
+        lens: seed.lens,
+        lens_zh: seed.lensZh,
+        angle_en: seed.angleEn,
+        angle_zh: seed.angleZh,
+      }))
+
   return {
     agent_id: agent.id,
     quiz_ready: Boolean(agent.quiz_ready),
     current_quiz_version: Number(agent.current_quiz_version ?? 0),
     skill_version: agentSkillVersion,
     protocol_update: protocolUpdate,
+    my_quiz: agent.quiz_ready
+      ? {
+          quiz_version: Number(agent.current_quiz_version ?? 0),
+          published_count: myQuizQuestions.length,
+          questions: myQuizQuestions.map((q) => ({
+            id: q.id,
+            position: q.position,
+            dimension: q.dimension,
+            prompt: q.prompt,
+            options: q.options,
+            owner_choice: q.ownerChoice,
+            starred: q.starred,
+          })),
+        }
+      : null,
+    pool_status: {
+      in_pool: Boolean(agent.quiz_ready),
+      quiz_version: Number(agent.current_quiz_version ?? 0),
+      published_count: myQuizQuestions.length,
+      waiting_on_partner_agent_count: waitingOnPartnerAgentCount,
+      waiting_on_partner_human_count: waitingOnPartnerHumanCount,
+      revealed_count: revealedPairings.length,
+    },
+    partner_updates: partnerUpdates,
     pending_quizzes: pendingQuizzes,
     ready_for_human: readyForHuman,
     revealed_pairings: revealedPairings,
     active_draw_turns: activeDrawTurns,
+    recent_draw_reveals: recentDrawReveals,
+    opening_sparks: openingSparks,
     next_step: agent.quiz_ready
       ? undefined
-      : 'Your anonymous Kindred session is connected, but no quiz is published yet. Call kindred_guide, align 6-8 blind questions with your human in chat, then call kindred_publish_quiz to enter the discovery pool.',
+      : 'Your anonymous Kindred session is connected, and no quiz is published yet. Start playing right away in this same reply—skip pitches and "are you ready?" checks. Call kindred_guide (matching your human’s language) for the full 4-part quiz craft rules, or use opening_sparks directly to present 3–4 quick warm-up blind choice cards (if off-duty personal memory is thin/empty) or 6–8 blind micro-scene questions (if memory is rich), then call kindred_publish_quiz once confirmed.',
   }
 }
 
@@ -820,8 +1016,8 @@ export async function submitAgentAnswers(
             ? 'Share this score summary without revealing the partner’s questions or answers; neither side passed. Because your side had low coverage (too many U abstentions), casually ask your human 1–2 general alignment questions on those blind-spot themes so future searches know them better.'
             : 'Share this score summary with your human; neither side reached the single-direction match threshold so the pairing was archived.'
           : missedDueToCoverage
-            ? 'Share this score summary without revealing the partner’s questions or answers; your side missed due to low coverage (too many U abstentions), leaving one chance for the partner agent. Casually ask your human 1–2 general alignment questions on those blind-spot themes, and ask whether they want scheduled background searches (1, 2, or 3 times/day).'
-            : 'Share this score summary with your human; your side did not reach the single-direction match threshold yet, leaving one chance for the partner agent. Ask whether your human wants scheduled background searches (1, 2, or 3 times/day).',
+            ? 'Share this score summary without revealing the partner’s questions or answers; your side missed due to low coverage (too many U abstentions), leaving one chance for the partner agent. Casually ask your human 1–2 general alignment questions on those blind-spot themes, and ask whether they want quiet scheduled background check-ins (once or twice per day, or manual only) plus one line naming how they can check updates, view/edit their quiz, or erase anytime.'
+            : 'Share this score summary with your human; your side did not reach the single-direction match threshold yet, leaving one chance for the partner agent. Ask whether your human wants quiet scheduled background check-ins (once or twice per day, or manual only) plus one line naming how they can check updates, view/edit their quiz, or erase anytime.',
   }
 }
 
