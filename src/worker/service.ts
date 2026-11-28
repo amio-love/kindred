@@ -15,15 +15,17 @@ import {
   OPTION_KEYS,
   buildAgentSyncReport,
   evaluateDirection,
+  getOptionKeys,
   isAnswerChoice,
   isOptionKey,
+  isValidChoiceForQuestion,
   passesAgentMatchGate,
   passesSingleDirectionGate,
   shuffleQuestionOptions,
 } from '../shared/quiz'
 import { sampleQuizSeeds } from '../shared/quizSeeds'
 import { CURRENT_SKILL_VERSION } from '../shared/skillTemplate'
-import type { AnswerEntry, ConfidenceLevel, OptionKey, PairingStatus, QuestionOptions } from '../shared/types'
+import type { AnswerEntry, ConfidenceLevel, OptionKey, PairingStatus, QuestionOptions, SubtextOptions } from '../shared/types'
 import {
   ensurePoolPairingsForAgent,
   formatDrawRoundView,
@@ -83,14 +85,15 @@ export function getQuizSeeds(options?: { locale?: 'zh' | 'en'; count?: number })
   const picked = sampleQuizSeeds(count)
   const seeds = picked.map((seed) => {
     if (locale === 'zh') {
-      return { lens: seed.lensZh, angle: seed.angleZh }
+      return { lens: seed.lensZh, format: seed.format, angle: seed.angleZh }
     }
     if (locale === 'en') {
-      return { lens: seed.lens, angle: seed.angleEn }
+      return { lens: seed.lens, format: seed.format, angle: seed.angleEn }
     }
     return {
       lens: seed.lens,
       lens_zh: seed.lensZh,
+      format: seed.format,
       angle: seed.angleEn,
       angle_zh: seed.angleZh,
     }
@@ -141,13 +144,24 @@ export async function publishQuiz(
     const dimension = rawDim || defaultDim
 
     const rawOptions = item.options as Record<string, unknown> | null
-    if (!rawOptions || typeof rawOptions !== 'object') {
-      throw new ProtocolError(400, `questions[${i}].options must have A, B, C, D`)
+    if (!rawOptions || typeof rawOptions !== 'object' || Array.isArray(rawOptions)) {
+      throw new ProtocolError(400, `questions[${i}].options must provide 2 to 4 choices (A/B, A/B/C, or A/B/C/D)`)
     }
 
-    const options = {} as QuestionOptions
+    const presentKeys: OptionKey[] = []
+    const options = {} as Record<OptionKey, string>
+    let sawMissingOptional = false
     for (const key of OPTION_KEYS) {
-      const val = typeof rawOptions[key] === 'string' ? rawOptions[key].trim() : ''
+      const rawVal = rawOptions[key]
+      const isOptional = key === 'C' || key === 'D'
+      if (isOptional && (rawVal === undefined || rawVal === null || (typeof rawVal === 'string' && rawVal.trim() === ''))) {
+        sawMissingOptional = true
+        continue
+      }
+      if (sawMissingOptional) {
+        throw new ProtocolError(400, `questions[${i}].options keys must be contiguous starting from A (found ${key} without preceding option)`)
+      }
+      const val = typeof rawVal === 'string' ? rawVal.trim() : ''
       if (val.length < 1 || val.length > 100) {
         throw new ProtocolError(
           400,
@@ -155,24 +169,30 @@ export async function publishQuiz(
         )
       }
       options[key] = val
+      presentKeys.push(key)
     }
 
-    const distinctOpts = new Set(OPTION_KEYS.map((key) => normalizeGuess(options[key])))
-    if (distinctOpts.size !== 4) {
-      throw new ProtocolError(400, `questions[${i}].options must contain 4 distinct choices`)
+    if (presentKeys.length < 2) {
+      throw new ProtocolError(400, `questions[${i}].options must contain at least A and B`)
     }
 
+    const distinctOpts = new Set(presentKeys.map((key) => normalizeGuess(options[key])))
+    if (distinctOpts.size !== presentKeys.length) {
+      throw new ProtocolError(400, `questions[${i}].options must contain ${presentKeys.length} distinct choices`)
+    }
+
+    const typedOptions = options as QuestionOptions
     const ownerChoice = item.owner_choice ?? item.ownerChoice
-    if (!isOptionKey(ownerChoice)) {
-      throw new ProtocolError(400, `questions[${i}].owner_choice must be A, B, C, or D`)
+    if (!isValidChoiceForQuestion(typedOptions, ownerChoice)) {
+      throw new ProtocolError(400, `questions[${i}].owner_choice must be one of ${presentKeys.join(', ')}`)
     }
     const rawPred = item.agent_predicted ?? item.agentPredicted
-    const agentPredicted = isOptionKey(rawPred) ? rawPred : ownerChoice
+    const agentPredicted = isValidChoiceForQuestion(typedOptions, rawPred) ? rawPred : ownerChoice
 
     parsed.push({
       dimension,
       prompt,
-      options,
+      options: typedOptions,
       ownerChoice,
       agentPredicted,
       confidence: normalizeConfidence(item.confidence ?? item.memory_confidence),
@@ -802,9 +822,9 @@ export async function getInbox(
           your_quiz_skill_version: agentSkillVersion,
           skill_url: `${base}/skill.md`,
           summary:
-            'Kindred upgraded quiz craft & interactive alignment rules, and now supports non-destructive quiz upgrades that preserve all existing pairings.',
+            'Kindred now supports crisp short 2–4 option questions (sharp binary splits, no-escape dilemmas, instant 3-choice sensory projections, and wavelength calls) with non-destructive in-place upgrades.',
           action:
-            'Re-read skill_url before drafting or refreshing questions, and offer your human a one-time optional quiz upgrade using your existing agent_token (do not repeat if they decline).',
+            'Call kindred_guide (or re-read skill_url) and offer your human a one-time optional upgrade to the crisp short 2–4 option format while keeping past pairings intact (do not repeat if they decline).',
         }
       : null
 
@@ -813,6 +833,7 @@ export async function getInbox(
     : sampleQuizSeeds(8).map((seed) => ({
         lens: seed.lens,
         lens_zh: seed.lensZh,
+        format: seed.format,
         angle_en: seed.angleEn,
         angle_zh: seed.angleZh,
       }))
@@ -855,7 +876,7 @@ export async function getInbox(
     opening_sparks: openingSparks,
     next_step: agent.quiz_ready
       ? undefined
-      : 'Your anonymous Kindred session is connected, and no quiz is published yet. Start playing right away in this same reply—skip pitches and "are you ready?" checks. Call kindred_guide (matching your human’s language) for the full 4-part quiz craft rules, or use opening_sparks directly to present 3–4 quick warm-up blind choice cards (if off-duty personal memory is thin/empty) or 6–8 blind micro-scene questions (if memory is rich), then call kindred_publish_quiz once confirmed.',
+      : 'Your anonymous Kindred session is connected, and no quiz is published yet. Start playing right away in this same reply—skip pitches and "are you ready?" checks. Call kindred_guide (matching your human’s language) for the short 2–4 option question craft rules, or use opening_sparks directly to present 3–4 quick ultra-short warm-up cards (if off-duty personal memory is thin/empty) or 6–8 ultra-short 2–4 option questions (if memory is rich), then call kindred_publish_quiz once confirmed.',
   }
 }
 
@@ -892,7 +913,7 @@ export async function submitAgentAnswers(
   const partnerQuizVersion = isA ? pairing.agent_b_quiz_version : pairing.agent_a_quiz_version
   const partnerVersionCol = isA ? 'agent_b_quiz_version' : 'agent_a_quiz_version'
   const partnerQs = await listQuestions(db, partnerId, partnerQuizVersion)
-  const validIds = new Set(partnerQs.map((q) => q.id))
+  const questionById = new Map(partnerQs.map((q) => [q.id, q]))
 
   const seenIds = new Set<string>()
   const parsedAnswers: Array<{ qId: string; choice: string }> = []
@@ -907,7 +928,8 @@ export async function submitAgentAnswers(
         ? item.questionId
         : ''
     const choice = item.choice
-    if (!validIds.has(qId) || !isAnswerChoice(choice)) {
+    const targetQ = questionById.get(qId)
+    if (!targetQ || !isAnswerChoice(choice) || (choice !== 'U' && !isValidChoiceForQuestion(targetQ.options, choice))) {
       throw new ProtocolError(400, `Invalid question_id or choice (${qId})`)
     }
     if (seenIds.has(qId)) {
@@ -1006,6 +1028,7 @@ export async function submitAgentAnswers(
       matched: dirSelf.matched,
       coverage: dirSelf.coverage,
       hit_rate: dirSelf.hitRate,
+      required_hit_rate: dirSelf.requiredHitRate,
       passed: selfPassed,
     },
     next_step:
@@ -1227,7 +1250,7 @@ export async function submitHumanAnswers(
   const partnerId = isA ? pairing.agent_b_id : pairing.agent_a_id
   const partnerQuizVersion = isA ? pairing.agent_b_quiz_version : pairing.agent_a_quiz_version
   const partnerQs = await listQuestions(db, partnerId, partnerQuizVersion)
-  const validIds = new Set(partnerQs.map((q) => q.id))
+  const questionById = new Map(partnerQs.map((q) => [q.id, q]))
 
   if (!Array.isArray(rawAnswers) || rawAnswers.length !== partnerQs.length) {
     throw new ProtocolError(400, `Expected ${partnerQs.length} human answers (one per partner question)`)
@@ -1246,8 +1269,14 @@ export async function submitHumanAnswers(
         ? item.questionId
         : ''
     const choice = item.choice
-    if (!validIds.has(qId) || !isOptionKey(choice)) {
-      throw new ProtocolError(400, `Each human answer must choose A, B, C, or D (${qId})`)
+    const targetQ = questionById.get(qId)
+    if (!targetQ || !isValidChoiceForQuestion(targetQ.options, choice)) {
+      const allowed = targetQ ? getOptionKeys(targetQ.options) : [...OPTION_KEYS]
+      const list =
+        allowed.length > 2
+          ? `${allowed.slice(0, -1).join(', ')}, or ${allowed[allowed.length - 1]}`
+          : allowed.join(' or ')
+      throw new ProtocolError(400, `Each human answer must choose ${list} (${qId})`)
     }
     if (seenIds.has(qId)) {
       throw new ProtocolError(400, `Duplicate question_id (${qId})`)
@@ -1613,12 +1642,12 @@ export async function guessDrawing(
   if (round.guesser_agent_id !== agent.id) throw new ProtocolError(403, 'Only the guesser can submit choices')
   const hasSubtextChoices = Boolean(round.subtext_options_json && round.correct_option)
   const subtextOptions = round.subtext_options_json
-    ? (JSON.parse(round.subtext_options_json) as QuestionOptions)
+    ? (JSON.parse(round.subtext_options_json) as SubtextOptions)
     : null
 
   const buildRevealedPayload = async (revealedRound: DrawRoundRow) => {
     const revealedOpts = revealedRound.subtext_options_json
-      ? (JSON.parse(revealedRound.subtext_options_json) as QuestionOptions)
+      ? (JSON.parse(revealedRound.subtext_options_json) as SubtextOptions)
       : null
     const existingNext = await db
       .prepare('SELECT * FROM draw_rounds WHERE game_id = ? AND round_number = ?')

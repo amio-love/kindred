@@ -68,6 +68,7 @@ async function dispatchToolCall(
         guide_markdown: renderSkillMarkdown(origin, { locale, seeds }),
         seeds: seeds.map((seed) => ({
           lens: locale === 'zh' ? seed.lensZh : seed.lens,
+          format: seed.format,
           angle: locale === 'zh' ? seed.angleZh : seed.angleEn,
         })),
       }

@@ -13,6 +13,7 @@ export const OPTION_KEYS: readonly OptionKey[] = ['A', 'B', 'C', 'D']
 export const MATCH_GATE = {
   minCoverage: 0.5,
   minHitRate: 0.55,
+  minNormalizedLift: 0.4,
   minAnswered: 2,
 } as const
 
@@ -22,6 +23,19 @@ export function isOptionKey(value: unknown): value is OptionKey {
 
 export function isAnswerChoice(value: unknown): value is OptionKey | 'U' {
   return isOptionKey(value) || value === 'U'
+}
+
+export function getOptionKeys(options: QuestionOptions): OptionKey[] {
+  return OPTION_KEYS.filter((key) => {
+    const val = options[key]
+    return typeof val === 'string' && val.trim().length > 0
+  })
+}
+
+export function isValidChoiceForQuestion(options: QuestionOptions, value: unknown): value is OptionKey {
+  if (!isOptionKey(value)) return false
+  const val = options[value]
+  return typeof val === 'string' && val.trim().length > 0
 }
 
 export function shuffleQuestionOptions(
@@ -34,9 +48,10 @@ export function shuffleQuestionOptions(
   ownerChoice: OptionKey
   agentPredicted: OptionKey
 } {
-  const entries: Array<{ oldKey: OptionKey; text: string }> = OPTION_KEYS.map((key) => ({
+  const presentKeys = getOptionKeys(options)
+  const entries: Array<{ oldKey: OptionKey; text: string }> = presentKeys.map((key) => ({
     oldKey: key,
-    text: options[key].trim(),
+    text: (options[key] ?? '').trim(),
   }))
 
   for (let i = entries.length - 1; i > 0; i--) {
@@ -46,11 +61,11 @@ export function shuffleQuestionOptions(
     entries[j] = tmp
   }
 
-  const nextOptions = {} as QuestionOptions
+  const nextOptions = {} as Record<OptionKey, string>
   let nextOwner: OptionKey = 'A'
   let nextPredicted: OptionKey = 'A'
 
-  OPTION_KEYS.forEach((newKey, idx) => {
+  presentKeys.forEach((newKey, idx) => {
     const item = entries[idx]!
     nextOptions[newKey] = item.text
     if (item.oldKey === ownerChoice) nextOwner = newKey
@@ -58,7 +73,7 @@ export function shuffleQuestionOptions(
   })
 
   return {
-    options: nextOptions,
+    options: nextOptions as QuestionOptions,
     ownerChoice: nextOwner,
     agentPredicted: nextPredicted,
   }
@@ -73,6 +88,7 @@ export function evaluateDirection(
   let answered = 0
   let abstained = 0
   let matched = 0
+  let chanceSum = 0
 
   for (const q of questions) {
     const ans = byId.get(q.id)
@@ -80,6 +96,8 @@ export function evaluateDirection(
       abstained += 1
       continue
     }
+    const optionCount = Math.max(2, getOptionKeys(q.options).length)
+    chanceSum += 1 / optionCount
     answered += 1
     if (ans.choice === q.ownerChoice) {
       matched += 1
@@ -88,8 +106,22 @@ export function evaluateDirection(
 
   const coverage = total > 0 ? answered / total : 0
   const hitRate = answered > 0 ? matched / answered : null
+  const chanceBaseline = answered > 0 ? chanceSum / answered : 0.25
+  const requiredHitRate = chanceBaseline + MATCH_GATE.minNormalizedLift * (1 - chanceBaseline)
+  const normalizedLift =
+    hitRate !== null && chanceBaseline < 1 ? (hitRate - chanceBaseline) / (1 - chanceBaseline) : null
 
-  return { total, answered, abstained, matched, coverage, hitRate }
+  return {
+    total,
+    answered,
+    abstained,
+    matched,
+    coverage,
+    hitRate,
+    chanceBaseline,
+    requiredHitRate,
+    normalizedLift,
+  }
 }
 
 export function passesSingleDirectionGate(dir: DirectionScore): boolean {
@@ -98,7 +130,8 @@ export function passesSingleDirectionGate(dir: DirectionScore): boolean {
     dir.answered >= Math.min(MATCH_GATE.minAnswered, dir.total) &&
     dir.coverage >= MATCH_GATE.minCoverage &&
     dir.hitRate !== null &&
-    dir.hitRate >= MATCH_GATE.minHitRate
+    dir.normalizedLift !== null &&
+    dir.normalizedLift + 1e-9 >= MATCH_GATE.minNormalizedLift
   )
 }
 
@@ -135,9 +168,9 @@ export function buildAgentSyncReport(
         questionId: q.id,
         prompt: q.prompt,
         agentChoice: agent.choice,
-        agentChoiceText: q.options[agent.choice],
+        agentChoiceText: q.options[agent.choice] ?? agent.choice,
         humanChoice: human.choice,
-        humanChoiceText: q.options[human.choice],
+        humanChoiceText: q.options[human.choice] ?? human.choice,
       })
     }
   }

@@ -6,6 +6,7 @@ import { describe, test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { SUBTEXT_PROMPT_POOL, SUBTEXT_PROMPT_POOL_EN } from '../shared/drawing'
 import { renderElevatorProtocolSvg } from '../shared/sampleSketch'
+import { CURRENT_SKILL_VERSION } from '../shared/skillTemplate'
 import type { QuestionOptions } from '../shared/types'
 import {
   eraseAgent,
@@ -878,7 +879,7 @@ describe('Phase 1 quiz publishing, screening gates, and double-blind immutabilit
     await db.prepare('UPDATE agents SET skill_version = 1').run()
     const legacyInboxA = await getInbox(db, ORIGIN, tokenA)
     assert.ok(legacyInboxA.protocol_update)
-    assert.equal(legacyInboxA.protocol_update?.current_skill_version, 2)
+    assert.equal(legacyInboxA.protocol_update?.current_skill_version, CURRENT_SKILL_VERSION)
     assert.equal(legacyInboxA.protocol_update?.your_quiz_skill_version, 1)
     assert.equal(legacyInboxA.protocol_update?.skill_url, `${ORIGIN}/skill.md`)
 
@@ -891,7 +892,7 @@ describe('Phase 1 quiz publishing, screening gates, and double-blind immutabilit
     const freshInboxA = await getInbox(db, ORIGIN, tokenA)
     assert.equal(freshInboxA.protocol_update, null)
     assert.equal(freshInboxA.current_quiz_version, 2)
-    assert.equal(freshInboxA.skill_version, 2)
+    assert.equal(freshInboxA.skill_version, CURRENT_SKILL_VERSION)
 
     await assert.rejects(
       () => submitAgentAnswers(db, tokenB, pairingId, mapMatchingAnswers(pairB.questions, qsA)),

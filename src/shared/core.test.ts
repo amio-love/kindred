@@ -32,6 +32,93 @@ describe('Option shuffling and paired matching gate', () => {
     assert.equal(shuffled.options[shuffled.ownerChoice], '放卧室外面')
     assert.equal(shuffled.options[shuffled.agentPredicted], '放床头柜静音')
     assert.equal(new Set(Object.values(shuffled.options)).size, 4)
+
+    const binaryShuffled = shuffleQuestionOptions({ A: '拉', B: '不拉' }, 'A', 'B', () => 0.2)
+    assert.deepEqual(Object.keys(binaryShuffled.options).sort(), ['A', 'B'])
+    assert.equal(binaryShuffled.options[binaryShuffled.ownerChoice], '拉')
+    assert.equal(binaryShuffled.options[binaryShuffled.agentPredicted], '不拉')
+
+    const ternaryShuffled = shuffleQuestionOptions(
+      { A: '门后藏着人', B: '走错门了', C: '等的人回来了' },
+      'C',
+      'A',
+      () => 0.6,
+    )
+    assert.deepEqual(Object.keys(ternaryShuffled.options).sort(), ['A', 'B', 'C'])
+    assert.equal(ternaryShuffled.options[ternaryShuffled.ownerChoice], '等的人回来了')
+    assert.equal(ternaryShuffled.options[ternaryShuffled.agentPredicted], '门后藏着人')
+  })
+
+  test('applies chance-adjusted normalized lift gate fairly across 2-choice, 3-choice, 4-choice, and mixed quizzes', () => {
+    const binaryQs: StoredQuestion[] = Array.from({ length: 10 }, (_, idx) => ({
+      id: `b_${idx + 1}`,
+      position: idx + 1,
+      dimension: '极短劈裂',
+      prompt: `B${idx + 1}`,
+      options: { A: '是', B: '否' },
+      ownerChoice: 'A',
+      agentPredicted: 'A',
+      confidence: 'high',
+      starred: false,
+    }))
+    const binarySixOfTen = evaluateDirection(
+      binaryQs,
+      binaryQs.map((q, idx) => ({ questionId: q.id, choice: idx < 6 ? 'A' : 'B' })),
+    )
+    const binarySevenOfTen = evaluateDirection(
+      binaryQs,
+      binaryQs.map((q, idx) => ({ questionId: q.id, choice: idx < 7 ? 'A' : 'B' })),
+    )
+    assert.equal(binarySixOfTen.requiredHitRate, 0.7)
+    assert.equal(passesSingleDirectionGate(binarySixOfTen), false)
+    assert.equal(passesSingleDirectionGate(binarySevenOfTen), true)
+
+    const ternaryQs: StoredQuestion[] = Array.from({ length: 5 }, (_, idx) => ({
+      id: `t_${idx + 1}`,
+      position: idx + 1,
+      dimension: '瞬间投射',
+      prompt: `T${idx + 1}`,
+      options: { A: '一', B: '二', C: '三' },
+      ownerChoice: 'A',
+      agentPredicted: 'A',
+      confidence: 'high',
+      starred: false,
+    }))
+    const ternaryTwoOfFour = evaluateDirection(
+      ternaryQs,
+      ternaryQs.map((q, idx) => ({ questionId: q.id, choice: idx < 2 ? 'A' : idx < 4 ? 'B' : 'U' })),
+    )
+    const ternaryThreeOfFive = evaluateDirection(
+      ternaryQs,
+      ternaryQs.map((q, idx) => ({ questionId: q.id, choice: idx < 3 ? 'A' : 'B' })),
+    )
+    assert.equal(passesSingleDirectionGate(ternaryTwoOfFour), false)
+    assert.equal(passesSingleDirectionGate(ternaryThreeOfFive), true)
+
+    const mixedQs: StoredQuestion[] = [
+      ...binaryQs.slice(0, 4),
+      ...Array.from({ length: 4 }, (_, idx) => ({
+        id: `q4_${idx + 1}`,
+        position: idx + 5,
+        dimension: '四选一',
+        prompt: `Q${idx + 5}`,
+        options: { A: '1', B: '2', C: '3', D: '4' },
+        ownerChoice: 'A' as const,
+        agentPredicted: 'A' as const,
+        confidence: 'high' as const,
+        starred: false,
+      })),
+    ]
+    const mixedFourOfEight = evaluateDirection(
+      mixedQs,
+      mixedQs.map((q, idx) => ({ questionId: q.id, choice: idx < 4 ? 'A' : 'B' })),
+    )
+    const mixedFiveOfEight = evaluateDirection(
+      mixedQs,
+      mixedQs.map((q, idx) => ({ questionId: q.id, choice: idx < 5 ? 'A' : 'B' })),
+    )
+    assert.equal(passesSingleDirectionGate(mixedFourOfEight), false)
+    assert.equal(passesSingleDirectionGate(mixedFiveOfEight), true)
   })
 
   test('rejects high-abstention lucky guesses under paired coverage and hit-rate gate', () => {
@@ -259,6 +346,7 @@ describe('Rotating scenario seed pool', () => {
     assert.equal(lenses.size, 8)
     for (const seed of QUIZ_SCENARIO_SEEDS) {
       assert.ok(seed.lens.trim().length > 0 && seed.lensZh.trim().length > 0)
+      assert.ok(seed.format === '2-choice' || seed.format === '3-choice')
       assert.ok(seed.angleEn.trim().length > 10 && seed.angleZh.trim().length > 6)
     }
     const sampled = sampleQuizSeeds(8, () => 0.42)

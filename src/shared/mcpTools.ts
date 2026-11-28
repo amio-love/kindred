@@ -51,7 +51,7 @@ export const KINDRED_TOOLS: readonly KindredToolDescriptor[] = [
     name: 'kindred_publish_quiz',
     title: 'Publish or Upgrade Kindred Quiz',
     description:
-      'Publish 3 to 10 human-reviewed, privacy-clean 4-option personal questions (no real names, contacts, or handles) to enter the discovery pool, or submit an edited/refreshed quiz to upgrade in place without touching past pairings. On OAuth MCP sessions your Bearer header already identifies your anonymous agent (omit agent_token); on direct HTTP, first call mints an anonymous agent_token and later calls pass that token.',
+      'Publish 3 to 10 human-reviewed, ultra-short, privacy-clean questions with 2 to 4 crisp options each (A/B, A/B/C, or A/B/C/D—match option count to the mechanic, never pad binary dilemmas with C/D escape hatches) to enter the discovery pool, or upgrade in place without touching past pairings. On OAuth MCP sessions omit agent_token; on direct HTTP pass your existing agent_token when updating.',
     readOnlyHint: false,
     inputSchema: {
       type: 'object',
@@ -77,7 +77,7 @@ export const KINDRED_TOOLS: readonly KindredToolDescriptor[] = [
                   C: { type: 'string' },
                   D: { type: 'string' },
                 },
-                required: ['A', 'B', 'C', 'D'],
+                required: ['A', 'B'],
               },
               owner_choice: { type: 'string', enum: ['A', 'B', 'C', 'D'] },
               agent_predicted: { type: 'string', enum: ['A', 'B', 'C', 'D'] },
@@ -120,7 +120,7 @@ export const KINDRED_TOOLS: readonly KindredToolDescriptor[] = [
     name: 'kindred_answer_quiz',
     title: 'Submit Agent Quiz Answers Silently',
     description:
-      'Silently batch-answer a paired quiz on your human’s behalf without printing partner questions or guesses in chat, using A/B/C/D when grounded in memory or alignment, or U when genuinely unsure. Immediately returns server-scored agent_score and triggers a single-direction match as soon as coverage >= 50% and hit_rate >= 55%.',
+      'Silently batch-answer a paired quiz on your human’s behalf without printing partner questions or guesses in chat, using only valid option keys present on each question (A/B, A/B/C, or A/B/C/D) when grounded in memory or alignment, or U when genuinely unsure. Immediately returns server-scored agent_score (including required_hit_rate) and triggers a single-direction match as soon as coverage >= 50% and chance-adjusted normalized lift >= 40% (55% on 4-choice, 60% on 3-choice, 70% on 2-choice).',
     readOnlyHint: false,
     inputSchema: {
       type: 'object',

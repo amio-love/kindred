@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite'
 import { describe, test } from 'node:test'
 import { fileURLToPath } from 'node:url'
+import { CURRENT_SKILL_VERSION } from '../shared/skillTemplate'
 import { sha256Base64Url } from './env'
 import app from './index'
 
@@ -425,7 +426,7 @@ describe('Streamable HTTP MCP, anonymous OAuth 2.1, CORS, and route boundary com
       result?: { isError?: boolean; structuredContent?: { current_skill_version?: number; seeds?: unknown[] } }
     }
     assert.equal(guidePayload.result?.isError, false)
-    assert.equal(guidePayload.result?.structuredContent?.current_skill_version, 2)
+    assert.equal(guidePayload.result?.structuredContent?.current_skill_version, CURRENT_SKILL_VERSION)
     assert.equal(guidePayload.result?.structuredContent?.seeds?.length, 8)
 
     const prePublishInbox = await app.request(
@@ -1237,6 +1238,143 @@ describe('Streamable HTTP MCP, anonymous OAuth 2.1, CORS, and route boundary com
     assert.equal(agentAFinalInbox.revealed_pairings[0]?.latest_partner_note?.body, 'This scene felt uncannily familiar')
     assert.equal(agentAFinalInbox.partner_updates.some((u) => u.kind === 'partner_note' && u.body === 'This scene felt uncannily familiar'), true)
     assert.equal(agentAFinalInbox.partner_updates.some((u) => u.kind === 'pairing_revealed'), true)
+  })
+
+  test('supports short 2-choice and 3-choice quizzes, enforces contiguous options and valid answer keys, and applies chance-adjusted gate', async () => {
+    const env = makeEnv()
+
+    const badGap = await app.request(
+      'https://kindred.example.test/api/quiz',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          questions: [
+            { dimension: '劈裂', prompt: '好事还是有趣的事？', options: { A: '好事', B: '有趣', D: '跳过C' }, owner_choice: 'A' },
+            { dimension: '两难', prompt: '拉不拉杆？', options: { A: '拉', B: '不拉' }, owner_choice: 'A' },
+            { dimension: '投射', prompt: '深夜开门声？', options: { A: '藏人', B: '走错', C: '回家' }, owner_choice: 'C' },
+          ],
+        }),
+      },
+      env,
+    )
+    assert.equal(badGap.status, 400)
+
+    const badOwnerChoice = await app.request(
+      'https://kindred.example.test/api/quiz',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          questions: [
+            { dimension: '劈裂', prompt: '好事还是有趣的事？', options: { A: '好事', B: '有趣' }, owner_choice: 'C' },
+            { dimension: '两难', prompt: '拉不拉杆？', options: { A: '拉', B: '不拉' }, owner_choice: 'A' },
+            { dimension: '投射', prompt: '深夜开门声？', options: { A: '藏人', B: '走错', C: '回家' }, owner_choice: 'C' },
+          ],
+        }),
+      },
+      env,
+    )
+    assert.equal(badOwnerChoice.status, 400)
+
+    const shortQuiz = [
+      { dimension: '极短劈裂', prompt: '明年要好事还是有趣的事？', options: { A: '好事', B: '有趣的事' }, owner_choice: 'B' },
+      { dimension: '死路两难', prompt: '烧蒙娜丽莎救 5 人，拉不拉？', options: { A: '拉', B: '不拉' }, owner_choice: 'A' },
+      { dimension: '瞬间投射', prompt: '深夜开门声第一念头？', options: { A: '藏着人', B: '走错门', C: '等的人回来了' }, owner_choice: 'C' },
+      { dimension: '波长站队', prompt: '半夜独食火锅偏哪边？', options: { A: '顶配享受', B: '有点凄凉' }, owner_choice: 'A' },
+    ]
+    const pubA = (await (
+      await app.request(
+        'https://kindred.example.test/api/quiz',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ questions: shortQuiz }),
+        },
+        env,
+      )
+    ).json()) as { agent_token: string }
+
+    const pubBRes = await app.request(
+      'https://kindred.example.test/api/quiz',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ questions: shortQuiz }),
+      },
+      env,
+    )
+    assert.equal(pubBRes.status, 201)
+    const pubB = (await pubBRes.json()) as {
+      agent_token: string
+      initial_quiz: { pairing_id: string; questions: Array<{ id: string; options: Record<string, string> }> }
+    }
+    const binaryQ = pubB.initial_quiz.questions.find((q) => Object.keys(q.options).length === 2)!
+    const ternaryQ = pubB.initial_quiz.questions.find((q) => Object.keys(q.options).length === 3)!
+    assert.ok(binaryQ)
+    assert.ok(ternaryQ)
+
+    const invalidAgentChoice = await app.request(
+      `https://kindred.example.test/api/pairings/${pubB.initial_quiz.pairing_id}/agent-answers`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${pubB.agent_token}` },
+        body: JSON.stringify({
+          answers: pubB.initial_quiz.questions.map((q) => ({
+            question_id: q.id,
+            choice: q.id === binaryQ.id ? 'C' : 'A',
+          })),
+        }),
+      },
+      env,
+    )
+    assert.equal(invalidAgentChoice.status, 400)
+
+    const myQuizA = (await (
+      await app.request('https://kindred.example.test/api/quiz', {
+        headers: { Authorization: `Bearer ${pubA.agent_token}` },
+      }, env)
+    ).json()) as { questions: Array<{ id: string; owner_choice: string }> }
+    const ownerMap = new Map(myQuizA.questions.map((q) => [q.id, q.owner_choice]))
+
+    const validAgentAns = await app.request(
+      `https://kindred.example.test/api/pairings/${pubB.initial_quiz.pairing_id}/agent-answers`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${pubB.agent_token}` },
+        body: JSON.stringify({
+          answers: pubB.initial_quiz.questions.map((q) => ({
+            question_id: q.id,
+            choice: ownerMap.get(q.id)!,
+          })),
+        }),
+      },
+      env,
+    )
+    assert.equal(validAgentAns.status, 200)
+    const scoreBody = (await validAgentAns.json()) as {
+      pairing_status: string
+      agent_score: { passed: boolean; required_hit_rate: number }
+    }
+    assert.equal(scoreBody.pairing_status, 'ready_for_humans')
+    assert.equal(scoreBody.agent_score.passed, true)
+    assert.ok(scoreBody.agent_score.required_hit_rate > 0.65 && scoreBody.agent_score.required_hit_rate < 0.7)
+
+    const invalidHumanChoice = await app.request(
+      `https://kindred.example.test/api/pairings/${pubB.initial_quiz.pairing_id}/human-answers`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${pubB.agent_token}` },
+        body: JSON.stringify({
+          answers: pubB.initial_quiz.questions.map((q) => ({
+            question_id: q.id,
+            choice: q.id === binaryQ.id ? 'D' : 'A',
+          })),
+        }),
+      },
+      env,
+    )
+    assert.equal(invalidHumanChoice.status, 400)
   })
 
   test('GET /skill.md, /llms.txt, /.well-known/mcp.json return expected docs while malformed/unknown paths return 404 instead of SPA HTML', async () => {

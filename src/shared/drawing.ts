@@ -1,5 +1,5 @@
 import { OPTION_KEYS } from './quiz'
-import type { OptionKey, QuestionOptions, Stroke, SubtextPromptTemplate } from './types'
+import type { OptionKey, Stroke, SubtextOptions, SubtextPromptTemplate } from './types'
 
 export const CANVAS_SIZE = 400
 export const MAX_STROKES = 60
@@ -262,7 +262,7 @@ export function buildShuffledSubtextOptions(
   drawerReading: string,
   peerReadings: readonly [string, string, string],
   rng: () => number = Math.random,
-): { options: QuestionOptions; correctOption: OptionKey } {
+): { options: SubtextOptions; correctOption: OptionKey } {
   const entries = [
     { text: drawerReading, isDrawerChoice: true },
     { text: peerReadings[0], isDrawerChoice: false },
@@ -277,7 +277,7 @@ export function buildShuffledSubtextOptions(
     entries[j] = tmp
   }
 
-  const options = {} as QuestionOptions
+  const options = {} as SubtextOptions
   let correctOption: OptionKey = 'A'
   OPTION_KEYS.forEach((key, idx) => {
     const entry = entries[idx]!

@@ -9,6 +9,7 @@ import type {
   PairingStatus,
   QuestionOptions,
   StoredQuestion,
+  SubtextOptions,
   SubtextPromptTemplate,
 } from '../shared/types'
 import { randomToken, sha256Hex } from './env'
@@ -360,7 +361,7 @@ export function formatDrawRoundView(
     row.status === 'picking_word' || hasSubtextChoices ? 'subtext_choice' : 'legacy_free_text'
   const subtextOptions =
     canSeeOptions && row.subtext_options_json
-      ? (JSON.parse(row.subtext_options_json) as QuestionOptions)
+      ? (JSON.parse(row.subtext_options_json) as SubtextOptions)
       : null
   const chosenOption =
     row.last_guess === 'A' || row.last_guess === 'B' || row.last_guess === 'C' || row.last_guess === 'D'

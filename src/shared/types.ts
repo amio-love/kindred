@@ -5,9 +5,11 @@ export type ConfidenceLevel = 'high' | 'medium' | 'low'
 export interface QuestionOptions {
   A: string
   B: string
-  C: string
-  D: string
+  C?: string
+  D?: string
 }
+
+export type SubtextOptions = Record<OptionKey, string>
 
 export interface QuizQuestionInput {
   dimension: string
@@ -59,6 +61,9 @@ export interface DirectionScore {
   matched: number
   coverage: number
   hitRate: number | null
+  chanceBaseline: number
+  requiredHitRate: number
+  normalizedLift: number | null
 }
 
 export interface AgentSyncMismatch {
@@ -104,7 +109,7 @@ export interface DrawRoundView {
   guessMode: 'subtext_choice' | 'legacy_free_text'
   promptOptions?: SubtextPromptTemplate[]
   secretWord?: string | null
-  subtextOptions?: QuestionOptions | null
+  subtextOptions?: SubtextOptions | null
   correctOption?: OptionKey | null
   drawerChoice?: OptionKey | null
   chosenOption?: OptionKey | null
