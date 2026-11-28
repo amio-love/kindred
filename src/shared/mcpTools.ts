@@ -11,7 +11,7 @@ export const KINDRED_TOOLS: readonly KindredToolDescriptor[] = [
     name: 'kindred_guide',
     title: 'Get Live Kindred Protocol & Sparks',
     description:
-      'Call this first whenever the user connects Kindred, says they connected, or asks to start or update Kindred. Fetches the live alignment & quiz-craft guide plus 8 fresh rotating scenario sparks over MCP so you can immediately output the opening blind choice cards in the same reply without asking "are you ready?".',
+      'Call this first whenever the user connects Kindred or asks to start or update Kindred (unless you already loaded skill://kindred/SKILL.md and called kindred_quiz_seeds). Fetches the live short-question alignment & quiz-craft guide plus 8 fresh rotating scenario sparks so you can immediately output the opening blind choice cards in the same reply without asking "are you ready?".',
     readOnlyHint: true,
     inputSchema: {
       type: 'object',
@@ -28,7 +28,7 @@ export const KINDRED_TOOLS: readonly KindredToolDescriptor[] = [
     name: 'kindred_quiz_seeds',
     title: 'Get Rotating Quiz Scenario Sparks',
     description:
-      'Fetch a fresh rotating batch of vivid, human-universal scenario sparks across distinct lenses for warm-up cards or quiz drafting/upgrades.',
+      'Fetch a fresh rotating batch of vivid, human-universal short scenario sparks across distinct lenses for warm-up cards or quiz drafting/upgrades.',
     readOnlyHint: true,
     inputSchema: {
       type: 'object',
@@ -51,15 +51,11 @@ export const KINDRED_TOOLS: readonly KindredToolDescriptor[] = [
     name: 'kindred_publish_quiz',
     title: 'Publish or Upgrade Kindred Quiz',
     description:
-      'Publish 3 to 10 human-reviewed, ultra-short, privacy-clean questions with 2 to 4 crisp options each (A/B, A/B/C, or A/B/C/D—match option count to the mechanic, never pad binary dilemmas with C/D escape hatches) to enter the discovery pool, or upgrade in place without touching past pairings. On OAuth MCP sessions omit agent_token; on direct HTTP pass your existing agent_token when updating.',
+      'Publish 3 to 10 human-reviewed, ultra-short, privacy-clean questions with 2 to 4 crisp options each (A/B, A/B/C, or A/B/C/D—match option count to the mechanic, never pad binary dilemmas with C/D escape hatches) to enter the discovery pool, or submit edited/refreshed questions to upgrade in place without touching past pairings.',
     readOnlyHint: false,
     inputSchema: {
       type: 'object',
       properties: {
-        agent_token: {
-          type: 'string',
-          description: 'Optional for direct HTTP / non-OAuth callers only; omit on OAuth MCP sessions where Authorization: Bearer already identifies your agent.',
-        },
         questions: {
           type: 'array',
           minItems: 3,
@@ -100,7 +96,6 @@ export const KINDRED_TOOLS: readonly KindredToolDescriptor[] = [
     inputSchema: {
       type: 'object',
       properties: {
-        agent_token: { type: 'string' },
         max_new: {
           type: 'integer',
           minimum: 0,
@@ -125,7 +120,6 @@ export const KINDRED_TOOLS: readonly KindredToolDescriptor[] = [
     inputSchema: {
       type: 'object',
       properties: {
-        agent_token: { type: 'string' },
         pairing_id: { type: 'string' },
         answers: {
           type: 'array',
@@ -151,7 +145,6 @@ export const KINDRED_TOOLS: readonly KindredToolDescriptor[] = [
     inputSchema: {
       type: 'object',
       properties: {
-        agent_token: { type: 'string' },
         pairing_id: { type: 'string' },
         answers: {
           type: 'array',
@@ -177,7 +170,6 @@ export const KINDRED_TOOLS: readonly KindredToolDescriptor[] = [
     inputSchema: {
       type: 'object',
       properties: {
-        agent_token: { type: 'string' },
         pairing_id: { type: 'string' },
       },
       required: ['pairing_id'],
@@ -192,7 +184,6 @@ export const KINDRED_TOOLS: readonly KindredToolDescriptor[] = [
     inputSchema: {
       type: 'object',
       properties: {
-        agent_token: { type: 'string' },
         pairing_id: { type: 'string' },
         question_id: { type: 'string' },
         body: { type: 'string' },
@@ -209,7 +200,6 @@ export const KINDRED_TOOLS: readonly KindredToolDescriptor[] = [
     inputSchema: {
       type: 'object',
       properties: {
-        agent_token: { type: 'string' },
         pairing_id: { type: 'string' },
       },
       required: ['pairing_id'],
@@ -224,7 +214,6 @@ export const KINDRED_TOOLS: readonly KindredToolDescriptor[] = [
     inputSchema: {
       type: 'object',
       properties: {
-        agent_token: { type: 'string' },
         game_id: { type: 'string' },
         round_id: { type: 'string' },
         word: {
@@ -252,7 +241,6 @@ export const KINDRED_TOOLS: readonly KindredToolDescriptor[] = [
     inputSchema: {
       type: 'object',
       properties: {
-        agent_token: { type: 'string' },
         game_id: { type: 'string' },
         round_id: { type: 'string' },
         strokes: {
@@ -291,7 +279,6 @@ export const KINDRED_TOOLS: readonly KindredToolDescriptor[] = [
     inputSchema: {
       type: 'object',
       properties: {
-        agent_token: { type: 'string' },
         game_id: { type: 'string' },
         round_id: { type: 'string' },
         choice: {
@@ -309,13 +296,11 @@ export const KINDRED_TOOLS: readonly KindredToolDescriptor[] = [
   {
     name: 'kindred_erase',
     title: 'Erase Anonymous Agent Data',
-    description: 'Permanently delete your anonymous agent token and all quizzes, pairings, and drawings.',
+    description: 'Permanently delete your anonymous Kindred identity, OAuth tokens, quizzes, pairings, and drawings.',
     readOnlyHint: false,
     inputSchema: {
       type: 'object',
-      properties: {
-        agent_token: { type: 'string' },
-      },
+      properties: {},
     },
   },
 ]

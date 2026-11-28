@@ -3,7 +3,6 @@ import HeroVideo from './HeroVideo'
 import HorizonWave from './HorizonWave'
 import HostShowcase from './HostShowcase'
 import { COPY, detectInitialLocale, type Locale } from './i18n'
-import { registerKindredWebMcp } from './webmcp'
 
 function fallbackCopy(text: string): boolean {
   const area = document.createElement('textarea')
@@ -39,14 +38,9 @@ export default function App() {
   const [scrolled, setScrolled] = useState(false)
   const [syncSignal, setSyncSignal] = useState(0)
 
-  const promptRef = useRef<HTMLParagraphElement | null>(null)
+  const urlRef = useRef<HTMLParagraphElement | null>(null)
   const copyTimerRef = useRef<number>(0)
   const stampTimerRef = useRef<number>(0)
-
-  useEffect(() => {
-    const reg = registerKindredWebMcp()
-    return reg.cleanup
-  }, [])
 
   useEffect(() => {
     document.documentElement.lang = locale === 'zh' ? 'zh-CN' : 'en'
@@ -78,21 +72,20 @@ export default function App() {
       : 'https://kindred.byheaven0912.workers.dev'
   const hostPath = origin.replace(/^https?:\/\//, '')
   const protocolPrefix = origin.startsWith('http://') ? 'http://' : 'https://'
-  const skillUrl = `${origin}/skill.md`
-  const promptText = `${copy.promptBefore}${skillUrl}${copy.promptAfter}`
+  const mcpUrl = `${origin}/mcp`
 
   const handleCopy = useCallback(async () => {
     let ok = false
     try {
       if (navigator.clipboard && window.isSecureContext) {
-        await navigator.clipboard.writeText(promptText)
+        await navigator.clipboard.writeText(mcpUrl)
         ok = true
       }
     } catch {
       ok = false
     }
-    if (!ok) ok = fallbackCopy(promptText)
-    if (!ok) selectNode(promptRef.current)
+    if (!ok) ok = fallbackCopy(mcpUrl)
+    if (!ok) selectNode(urlRef.current)
 
     setCopyState(ok ? 'copied' : 'fallback')
     if (ok) setSyncSignal((n) => n + 1)
@@ -106,7 +99,7 @@ export default function App() {
 
     window.clearTimeout(copyTimerRef.current)
     copyTimerRef.current = window.setTimeout(() => setCopyState('idle'), 2800)
-  }, [promptText])
+  }, [mcpUrl])
 
   const handleSlipClick = useCallback(
     (event: React.MouseEvent<HTMLDivElement>) => {
@@ -139,10 +132,10 @@ export default function App() {
           </a>
 
           <nav className="nav__links" aria-label="Kindred">
-            <a className="nav__a" href="/skill.md">
+            <a className="nav__a" href="/.well-known/mcp.json">
               <svg viewBox="0 0 16 16" aria-hidden="true">
                 <path
-                  d="M4 1.8h5.2L12.5 5v8.2a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V2.8a1 1 0 0 1 1-1z M9 1.8V5.3h3.4M5.5 8.5h5M5.5 11h3.5"
+                  d="M2.5 5.2L8 2.2l5.5 3v5.6L8 13.8l-5.5-3V5.2z M2.5 5.2L8 8.2l5.5-3 M8 8.2v5.6"
                   fill="none"
                   stroke="currentColor"
                   strokeWidth="1.4"
@@ -287,15 +280,13 @@ export default function App() {
                     </span>
                   </div>
 
-                  <p ref={promptRef} className="slip__text">
-                    {copy.promptBefore}
+                  <p ref={urlRef} className="slip__text">
                     <span className="slip__url">
                       {protocolPrefix}
                       <wbr />
                       {hostPath}/<wbr />
-                      skill.md
+                      mcp
                     </span>
-                    {copy.promptAfter}
                   </p>
 
                   <div className="slip__foot">

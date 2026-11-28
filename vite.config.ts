@@ -9,8 +9,10 @@ export default defineConfig({
   },
   server: {
     proxy: {
-      '/api': 'http://127.0.0.1:8787',
-      '/skill.md': 'http://127.0.0.1:8787',
+      '/.well-known': 'http://127.0.0.1:8787',
+      '/oauth': 'http://127.0.0.1:8787',
+      '/mcp': 'http://127.0.0.1:8787',
+      '/img': 'http://127.0.0.1:8787',
     },
   },
 })

@@ -4,8 +4,14 @@ import { join } from 'node:path'
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite'
 import { describe, test } from 'node:test'
 import { fileURLToPath } from 'node:url'
-import { CURRENT_SKILL_VERSION } from '../shared/skillTemplate'
-import { sha256Base64Url } from './env'
+import {
+  CURRENT_SKILL_VERSION,
+  KINDRED_SKILL_EXTENSION,
+  KINDRED_SKILL_FRONTMATTER,
+  KINDRED_SKILL_INDEX_URI,
+  KINDRED_SKILL_URI,
+} from '../shared/skillTemplate'
+import { sha256Base64Url, sha256Hex } from './env'
 import app from './index'
 
 function createMemD1(): D1Database {
@@ -85,6 +91,37 @@ function sampleQuestions(prefix: string) {
     options: { A: `${prefix}-a-${i}`, B: `${prefix}-b-${i}`, C: `${prefix}-c-${i}`, D: `${prefix}-d-${i}` },
     owner_choice: 'A',
   }))
+}
+
+async function mcpToolCall<T = Record<string, unknown>>(
+  env: ReturnType<typeof makeEnv>,
+  accessToken: string,
+  name: string,
+  args: Record<string, unknown> = {},
+): Promise<{ isError: boolean; data: T }> {
+  const res = await app.request(
+    'https://kindred.example.test/mcp',
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: Math.floor(Math.random() * 100_000),
+        method: 'tools/call',
+        params: { name, arguments: args },
+      }),
+    },
+    env,
+  )
+  assert.equal(res.status, 200)
+  const body = (await res.json()) as {
+    result?: { isError?: boolean; structuredContent?: T; content?: Array<{ text?: string }> }
+  }
+  const isError = Boolean(body.result?.isError)
+  const data =
+    body.result?.structuredContent ??
+    (body.result?.content?.[0]?.text ? (JSON.parse(body.result.content[0].text) as T) : ({} as T))
+  return { isError, data }
 }
 
 async function runAnonymousOAuthFlow(
@@ -242,7 +279,7 @@ async function runAnonymousOAuthFlow(
   }
 }
 
-describe('Streamable HTTP MCP, anonymous OAuth 2.1, CORS, and route boundary compliance', () => {
+describe('Pure Streamable HTTP MCP, anonymous OAuth 2.1, SEP-2640 Skills over MCP, and route boundaries', () => {
   test('unauthenticated /mcp returns 401 WWW-Authenticate OAuth challenge and CORS exposes WWW-Authenticate', async () => {
     const env = makeEnv()
 
@@ -295,17 +332,23 @@ describe('Streamable HTTP MCP, anonymous OAuth 2.1, CORS, and route boundary com
     assert.match(preflight.headers.get('Access-Control-Expose-Headers') ?? '', /WWW-Authenticate/i)
   })
 
-  test('anonymous OAuth 2.1 DCR + PKCE S256 provisions persistent MCP identity, supports refresh rotation, replay revocation, and erase cascade', async () => {
+  test('anonymous OAuth 2.1 + SEP-2640 (skills/list, skills/get, deterministic resources/read), token rotation, and erase cascade', async () => {
     const env = makeEnv()
 
     for (const path of ['/.well-known/oauth-protected-resource', '/.well-known/oauth-protected-resource/mcp']) {
       const prmRes = await app.request(`https://kindred.example.test${path}`, { method: 'GET' }, env)
       assert.equal(prmRes.status, 200)
       assert.equal(prmRes.headers.get('Cache-Control'), 'no-store')
-      const prm = (await prmRes.json()) as { resource: string; authorization_servers: string[]; scopes_supported: string[] }
+      const prm = (await prmRes.json()) as {
+        resource: string
+        authorization_servers: string[]
+        scopes_supported: string[]
+        resource_documentation: string
+      }
       assert.equal(prm.resource, 'https://kindred.example.test/mcp')
       assert.deepEqual(prm.authorization_servers, ['https://kindred.example.test'])
       assert.deepEqual(prm.scopes_supported, ['kindred'])
+      assert.equal(prm.resource_documentation, 'https://kindred.example.test')
     }
 
     const asRes = await app.request('https://kindred.example.test/.well-known/oauth-authorization-server', { method: 'GET' }, env)
@@ -379,6 +422,11 @@ describe('Streamable HTTP MCP, anonymous OAuth 2.1, CORS, and route boundary com
           { jsonrpc: '2.0', method: 'notifications/initialized' },
           { jsonrpc: '2.0', id: 2, method: 'tools/list' },
           { jsonrpc: '2.0', id: 3, method: 'prompts/list' },
+          { jsonrpc: '2.0', id: 4, method: 'skills/list' },
+          { jsonrpc: '2.0', id: 5, method: 'skills/get', params: { uri: KINDRED_SKILL_URI } },
+          { jsonrpc: '2.0', id: 6, method: 'resources/list' },
+          { jsonrpc: '2.0', id: 7, method: 'resources/read', params: { uri: KINDRED_SKILL_URI } },
+          { jsonrpc: '2.0', id: 8, method: 'resources/read', params: { uri: KINDRED_SKILL_INDEX_URI } },
         ]),
       },
       env,
@@ -387,154 +435,219 @@ describe('Streamable HTTP MCP, anonymous OAuth 2.1, CORS, and route boundary com
     assert.equal(batchRes.headers.get('Cache-Control'), 'no-store')
     const items = (await batchRes.json()) as Array<{
       id: number
-      result?: {
-        protocolVersion?: string
-        serverInfo?: { name?: string; version?: string }
-        capabilities?: { tools?: unknown; resources?: unknown; prompts?: unknown }
-        instructions?: string
-        tools?: Array<{ name: string }>
-        prompts?: Array<{ name: string }>
-      }
+      result?: Record<string, unknown>
     }>
-    assert.equal(items.length, 3)
-    assert.equal(items[0]?.result?.protocolVersion, '2025-03-26')
-    assert.equal(items[0]?.result?.serverInfo?.version, '2.4.0')
-    assert.ok(items[0]?.result?.capabilities?.prompts)
-    assert.ok(items[0]?.result?.instructions?.includes('kindred_guide'))
-    assert.equal(items[1]?.result?.tools?.length, 13)
+    assert.equal(items.length, 8)
+
+    const initRes = items[0]!.result as {
+      protocolVersion?: string
+      serverInfo?: { name?: string; version?: string }
+      capabilities?: {
+        tools?: unknown
+        resources?: unknown
+        prompts?: unknown
+        extensions?: Record<string, unknown>
+      }
+      instructions?: string
+    }
+    assert.equal(initRes.protocolVersion, '2025-03-26')
+    assert.equal(initRes.serverInfo?.version, '3.0.0')
+    assert.ok(initRes.capabilities?.prompts)
+    assert.deepEqual(initRes.capabilities?.extensions?.[KINDRED_SKILL_EXTENSION], {})
+    assert.ok(initRes.instructions?.includes(KINDRED_SKILL_URI))
+    assert.ok(initRes.instructions?.includes('kindred_guide'))
+    assert.equal(initRes.instructions?.includes('agent_token'), false)
+
+    const toolsRes = items[1]!.result as {
+      tools?: Array<{ name: string; inputSchema?: { properties?: Record<string, unknown> } }>
+    }
+    assert.equal(toolsRes.tools?.length, 13)
+    for (const tool of toolsRes.tools ?? []) {
+      assert.equal('agent_token' in (tool.inputSchema?.properties ?? {}), false, `${tool.name} should not expose agent_token`)
+    }
+
+    const promptsRes = items[2]!.result as { prompts?: Array<{ name: string }> }
     assert.deepEqual(
-      items[2]?.result?.prompts?.map((p) => p.name),
+      promptsRes.prompts?.map((p) => p.name),
       ['start_kindred', 'upgrade_kindred'],
     )
 
-    const guideCall = await app.request(
-      'https://kindred.example.test/mcp',
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
-        body: JSON.stringify({
-          jsonrpc: '2.0',
-          id: 20,
-          method: 'tools/call',
-          params: { name: 'kindred_guide', arguments: { locale: 'zh' } },
-        }),
-      },
-      env,
-    )
-    assert.equal(guideCall.status, 200)
-    const guidePayload = (await guideCall.json()) as {
-      result?: { isError?: boolean; structuredContent?: { current_skill_version?: number; seeds?: unknown[] } }
+    const skillsListRes = items[3]!.result as {
+      skills: Array<{
+        uri: string
+        frontmatter: { name: string; description: string }
+        resources: Array<{ uri: string; digest: string; size: number }>
+      }>
     }
-    assert.equal(guidePayload.result?.isError, false)
-    assert.equal(guidePayload.result?.structuredContent?.current_skill_version, CURRENT_SKILL_VERSION)
-    assert.equal(guidePayload.result?.structuredContent?.seeds?.length, 8)
+    assert.equal(skillsListRes.skills.length, 1)
+    const listedSkill = skillsListRes.skills[0]!
+    assert.equal(listedSkill.uri, KINDRED_SKILL_URI)
+    assert.deepEqual(listedSkill.frontmatter, KINDRED_SKILL_FRONTMATTER)
+    assert.equal(listedSkill.resources.length, 1)
+    assert.equal(listedSkill.resources[0]?.uri, KINDRED_SKILL_URI)
+    assert.match(listedSkill.resources[0]?.digest ?? '', /^sha256:[0-9a-f]{64}$/)
 
-    const prePublishInbox = await app.request(
+    const skillsGetRes = items[4]!.result as { skill: typeof listedSkill }
+    assert.deepEqual(skillsGetRes.skill, listedSkill)
+
+    const resourcesListRes = items[5]!.result as { resources: Array<{ uri: string; mimeType: string }> }
+    assert.deepEqual(
+      resourcesListRes.resources.map((r) => r.uri),
+      [KINDRED_SKILL_URI, KINDRED_SKILL_INDEX_URI],
+    )
+
+    const skillReadRes = items[6]!.result as { contents: Array<{ uri: string; mimeType: string; text: string }> }
+    const skillText = skillReadRes.contents[0]!.text
+    assert.equal(skillReadRes.contents[0]!.uri, KINDRED_SKILL_URI)
+    assert.equal(skillReadRes.contents[0]!.mimeType, 'text/markdown')
+    assert.equal(new TextEncoder().encode(skillText).byteLength, listedSkill.resources[0]!.size)
+    assert.equal(`sha256:${await sha256Hex(skillText)}`, listedSkill.resources[0]!.digest)
+    assert.ok(skillText.startsWith(`---\nname: ${KINDRED_SKILL_FRONTMATTER.name}\ndescription: ${KINDRED_SKILL_FRONTMATTER.description}\n---`))
+    assert.equal(skillText.includes('/api/'), false)
+    assert.equal(skillText.includes('/skill.md'), false)
+    assert.equal(skillText.includes('agent_token'), false)
+
+    const secondSkillRead = await app.request(
       'https://kindred.example.test/mcp',
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
         body: JSON.stringify({
           jsonrpc: '2.0',
-          id: 21,
-          method: 'tools/call',
-          params: { name: 'kindred_inbox', arguments: {} },
+          id: 9,
+          method: 'resources/read',
+          params: { uri: KINDRED_SKILL_URI },
         }),
       },
       env,
     )
-    const preInboxBody = (await prePublishInbox.json()) as {
-      result?: {
-        isError?: boolean
-        structuredContent?: {
-          agent_id?: string
-          quiz_ready?: boolean
-          my_quiz?: unknown
-          pool_status?: { in_pool?: boolean }
-          opening_sparks?: unknown[]
-          next_step?: string
-        }
-      }
+    const secondSkillBody = (await secondSkillRead.json()) as {
+      result?: { contents?: Array<{ text: string }> }
     }
-    assert.equal(preInboxBody.result?.isError, false)
-    assert.equal(preInboxBody.result?.structuredContent?.quiz_ready, false)
-    assert.equal(preInboxBody.result?.structuredContent?.my_quiz, null)
-    assert.equal(preInboxBody.result?.structuredContent?.pool_status?.in_pool, false)
-    assert.equal(preInboxBody.result?.structuredContent?.opening_sparks?.length, 8)
-    assert.ok(preInboxBody.result?.structuredContent?.next_step?.includes('kindred_publish_quiz'))
-    const oauthAgentId = preInboxBody.result?.structuredContent?.agent_id
+    assert.equal(secondSkillBody.result?.contents?.[0]?.text, skillText)
+
+    const indexReadRes = items[7]!.result as { contents: Array<{ uri: string; mimeType: string; text: string }> }
+    assert.equal(indexReadRes.contents[0]!.uri, KINDRED_SKILL_INDEX_URI)
+    assert.equal(indexReadRes.contents[0]!.mimeType, 'application/json')
+    const parsedIndex = JSON.parse(indexReadRes.contents[0]!.text) as {
+      skills: Array<{ url: string; frontmatter: { name: string; description: string } }>
+    }
+    assert.deepEqual(parsedIndex, {
+      skills: [{ url: KINDRED_SKILL_URI, frontmatter: KINDRED_SKILL_FRONTMATTER }],
+    })
+
+    const legacyResourceRejected = await app.request(
+      'https://kindred.example.test/mcp',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 10,
+          method: 'resources/read',
+          params: { uri: 'kindred://skill' },
+        }),
+      },
+      env,
+    )
+    assert.equal(legacyResourceRejected.status, 400)
+    assert.equal(((await legacyResourceRejected.json()) as { error?: { code?: number } }).error?.code, -32602)
+
+    const unknownSkillRejected = await app.request(
+      'https://kindred.example.test/mcp',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 11,
+          method: 'skills/get',
+          params: { uri: 'skill://other/SKILL.md' },
+        }),
+      },
+      env,
+    )
+    assert.equal(unknownSkillRejected.status, 400)
+    assert.equal(((await unknownSkillRejected.json()) as { error?: { code?: number } }).error?.code, -32602)
+
+    const promptGetRes = await app.request(
+      'https://kindred.example.test/mcp',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 12,
+          method: 'prompts/get',
+          params: { name: 'start_kindred', arguments: { locale: 'zh' } },
+        }),
+      },
+      env,
+    )
+    const promptBody = (await promptGetRes.json()) as {
+      result?: { messages?: Array<{ content?: { text?: string } }> }
+    }
+    const promptText = promptBody.result?.messages?.[0]?.content?.text ?? ''
+    assert.ok(promptText.includes('Session Scenario Sparks'))
+    assert.equal(promptText.includes('/api/quiz'), false)
+
+    const guide = await mcpToolCall<{
+      current_skill_version: number
+      skill_uri: string
+      seeds: unknown[]
+      guide_markdown: string
+    }>(env, session.access_token, 'kindred_guide', { locale: 'zh' })
+    assert.equal(guide.isError, false)
+    assert.equal(guide.data.current_skill_version, CURRENT_SKILL_VERSION)
+    assert.equal(guide.data.skill_uri, KINDRED_SKILL_URI)
+    assert.equal(guide.data.seeds.length, 8)
+    assert.equal(guide.data.guide_markdown.includes('/api/quiz'), false)
+
+    const preInbox = await mcpToolCall<{
+      agent_id: string
+      quiz_ready: boolean
+      my_quiz: unknown
+      pool_status: { in_pool: boolean }
+      opening_sparks: unknown[]
+      next_step: string
+    }>(env, session.access_token, 'kindred_inbox')
+    assert.equal(preInbox.isError, false)
+    assert.equal(preInbox.data.quiz_ready, false)
+    assert.equal(preInbox.data.my_quiz, null)
+    assert.equal(preInbox.data.pool_status.in_pool, false)
+    assert.equal(preInbox.data.opening_sparks.length, 8)
+    assert.ok(preInbox.data.next_step.includes('kindred_publish_quiz'))
+    const oauthAgentId = preInbox.data.agent_id
     assert.ok(oauthAgentId)
 
-    const firstPublish = await app.request(
-      'https://kindred.example.test/mcp',
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
-        body: JSON.stringify({
-          jsonrpc: '2.0',
-          id: 22,
-          method: 'tools/call',
-          params: { name: 'kindred_publish_quiz', arguments: { questions: sampleQuestions('oauth-v1') } },
-        }),
-      },
-      env,
-    )
-    const firstPubBody = (await firstPublish.json()) as {
-      result?: {
-        isError?: boolean
-        structuredContent?: {
-          agent_id?: string
-          agent_token?: string
-          mcp_url?: string
-          quiz_version?: number
-          upgraded?: boolean
-        }
-      }
-    }
-    assert.equal(firstPubBody.result?.isError, false)
-    assert.equal(firstPubBody.result?.structuredContent?.agent_id, oauthAgentId)
-    assert.equal(firstPubBody.result?.structuredContent?.agent_token, undefined)
-    assert.equal(firstPubBody.result?.structuredContent?.mcp_url, 'https://kindred.example.test/mcp')
-    assert.equal(firstPubBody.result?.structuredContent?.quiz_version, 1)
-    assert.equal(firstPubBody.result?.structuredContent?.upgraded, false)
+    const firstPub = await mcpToolCall<{
+      agent_id: string
+      agent_token?: string
+      mcp_url: string
+      quiz_version: number
+      upgraded: boolean
+    }>(env, session.access_token, 'kindred_publish_quiz', { questions: sampleQuestions('oauth-v1') })
+    assert.equal(firstPub.isError, false)
+    assert.equal(firstPub.data.agent_id, oauthAgentId)
+    assert.equal(firstPub.data.agent_token, undefined)
+    assert.equal(firstPub.data.mcp_url, 'https://kindred.example.test/mcp')
+    assert.equal(firstPub.data.quiz_version, 1)
+    assert.equal(firstPub.data.upgraded, false)
 
-    const spoofArgRes = await app.request(
-      'https://kindred.example.test/mcp',
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
-        body: JSON.stringify({
-          jsonrpc: '2.0',
-          id: 23,
-          method: 'tools/call',
-          params: { name: 'kindred_inbox', arguments: { agent_token: 'knd_other_agent_token' } },
-        }),
-      },
-      env,
-    )
-    const spoofBody = (await spoofArgRes.json()) as { result?: { isError?: boolean } }
-    assert.equal(spoofBody.result?.isError, true)
+    const spoofArg = await mcpToolCall(env, session.access_token, 'kindred_inbox', {
+      agent_token: 'knd_other_agent_token',
+    })
+    assert.equal(spoofArg.isError, true)
 
-    const secondPublish = await app.request(
-      'https://kindred.example.test/mcp',
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
-        body: JSON.stringify({
-          jsonrpc: '2.0',
-          id: 24,
-          method: 'tools/call',
-          params: { name: 'kindred_publish_quiz', arguments: { questions: sampleQuestions('oauth-v2') } },
-        }),
-      },
+    const secondPub = await mcpToolCall<{ quiz_version: number; upgraded: boolean }>(
       env,
+      session.access_token,
+      'kindred_publish_quiz',
+      { questions: sampleQuestions('oauth-v2') },
     )
-    const secondPubBody = (await secondPublish.json()) as {
-      result?: { isError?: boolean; structuredContent?: { quiz_version?: number; upgraded?: boolean } }
-    }
-    assert.equal(secondPubBody.result?.isError, false)
-    assert.equal(secondPubBody.result?.structuredContent?.quiz_version, 2)
-    assert.equal(secondPubBody.result?.structuredContent?.upgraded, true)
+    assert.equal(secondPub.isError, false)
+    assert.equal(secondPub.data.quiz_version, 2)
+    assert.equal(secondPub.data.upgraded, true)
 
     const refreshRes = await app.request(
       'https://kindred.example.test/oauth/token',
@@ -565,43 +678,25 @@ describe('Streamable HTTP MCP, anonymous OAuth 2.1, CORS, and route boundary com
     )
     assert.equal(oldTokenAfterRotate.status, 401)
 
-    const newTokenInbox = await app.request(
-      'https://kindred.example.test/mcp',
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${rotated.access_token}` },
-        body: JSON.stringify({
-          jsonrpc: '2.0',
-          id: 26,
-          method: 'tools/call',
-          params: { name: 'kindred_inbox', arguments: { max_new: 0 } },
-        }),
-      },
-      env,
-    )
-    const newInboxBody = (await newTokenInbox.json()) as {
-      result?: {
-        structuredContent?: {
-          agent_id?: string
-          current_quiz_version?: number
-          quiz_ready?: boolean
-          my_quiz?: {
-            quiz_version?: number
-            published_count?: number
-            questions?: Array<{ prompt: string; owner_choice: string }>
-          }
-          pool_status?: { in_pool?: boolean; quiz_version?: number; published_count?: number }
-        }
+    const newInbox = await mcpToolCall<{
+      agent_id: string
+      current_quiz_version: number
+      quiz_ready: boolean
+      my_quiz: {
+        quiz_version: number
+        published_count: number
+        questions: Array<{ prompt: string; owner_choice: string }>
       }
-    }
-    assert.equal(newInboxBody.result?.structuredContent?.agent_id, oauthAgentId)
-    assert.equal(newInboxBody.result?.structuredContent?.current_quiz_version, 2)
-    assert.equal(newInboxBody.result?.structuredContent?.quiz_ready, true)
-    assert.equal(newInboxBody.result?.structuredContent?.my_quiz?.quiz_version, 2)
-    assert.equal(newInboxBody.result?.structuredContent?.my_quiz?.published_count, 3)
-    assert.equal(newInboxBody.result?.structuredContent?.my_quiz?.questions?.[0]?.prompt, 'oauth-v2 evening habit question 1?')
-    assert.equal(newInboxBody.result?.structuredContent?.pool_status?.in_pool, true)
-    assert.equal(newInboxBody.result?.structuredContent?.pool_status?.published_count, 3)
+      pool_status: { in_pool: boolean; quiz_version: number; published_count: number }
+    }>(env, rotated.access_token, 'kindred_inbox', { max_new: 0 })
+    assert.equal(newInbox.data.agent_id, oauthAgentId)
+    assert.equal(newInbox.data.current_quiz_version, 2)
+    assert.equal(newInbox.data.quiz_ready, true)
+    assert.equal(newInbox.data.my_quiz.quiz_version, 2)
+    assert.equal(newInbox.data.my_quiz.published_count, 3)
+    assert.equal(newInbox.data.my_quiz.questions[0]?.prompt, 'oauth-v2 evening habit question 1?')
+    assert.equal(newInbox.data.pool_status.in_pool, true)
+    assert.equal(newInbox.data.pool_status.published_count, 3)
 
     const replayRefresh = await app.request(
       'https://kindred.example.test/oauth/token',
@@ -631,22 +726,9 @@ describe('Streamable HTTP MCP, anonymous OAuth 2.1, CORS, and route boundary com
     assert.equal(revokedAfterReplay.status, 401)
 
     const eraseSession = await runAnonymousOAuthFlow(env)
-    const eraseCall = await app.request(
-      'https://kindred.example.test/mcp',
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${eraseSession.access_token}` },
-        body: JSON.stringify({
-          jsonrpc: '2.0',
-          id: 28,
-          method: 'tools/call',
-          params: { name: 'kindred_erase', arguments: {} },
-        }),
-      },
-      env,
-    )
-    assert.equal(eraseCall.status, 200)
-    assert.equal(((await eraseCall.json()) as { result?: { isError?: boolean } }).result?.isError, false)
+    const eraseCall = await mcpToolCall<{ erased: boolean }>(env, eraseSession.access_token, 'kindred_erase')
+    assert.equal(eraseCall.isError, false)
+    assert.equal(eraseCall.data.erased, true)
 
     const afterEraseMcp = await app.request(
       'https://kindred.example.test/mcp',
@@ -660,7 +742,7 @@ describe('Streamable HTTP MCP, anonymous OAuth 2.1, CORS, and route boundary com
     assert.equal(afterEraseMcp.status, 401)
   })
 
-  test('OAuth 2.1 enforces redirect URI safety, CSRF, PKCE S256, code replay revocation, confidential client auth, revocation, and legacy HTTP token compatibility', async () => {
+  test('OAuth 2.1 enforces redirect URI safety, CSRF, PKCE S256, code replay revocation, confidential client auth, revocation, CIMD, and rejects query tokens', async () => {
     const env = makeEnv()
 
     for (const badUri of [
@@ -777,26 +859,6 @@ describe('Streamable HTTP MCP, anonymous OAuth 2.1, CORS, and route boundary com
       env,
     )
     assert.equal(oauthInQueryRejected.status, 401)
-
-    const oauthOnDirectQuizRejected = await app.request(
-      'https://kindred.example.test/api/quiz',
-      {
-        method: 'GET',
-        headers: { Authorization: `Bearer ${session.access_token}` },
-      },
-      env,
-    )
-    assert.equal(oauthOnDirectQuizRejected.status, 401)
-
-    const oauthOnDirectApiRejected = await app.request(
-      'https://kindred.example.test/api/agent',
-      {
-        method: 'DELETE',
-        headers: { Authorization: `Bearer ${session.access_token}` },
-      },
-      env,
-    )
-    assert.equal(oauthOnDirectApiRejected.status, 401)
 
     const codeReplay = await app.request(
       'https://kindred.example.test/oauth/token',
@@ -970,312 +1032,162 @@ describe('Streamable HTTP MCP, anonymous OAuth 2.1, CORS, and route boundary com
       env,
     )
     assert.equal(afterRevoke.status, 401)
-
-    const legacyQuizRes = await app.request(
-      'https://kindred.example.test/api/quiz',
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ questions: sampleQuestions('legacy') }),
-      },
-      env,
-    )
-    assert.equal(legacyQuizRes.status, 201)
-    const legacyQuiz = (await legacyQuizRes.json()) as { agent_id: string; agent_token: string }
-    const legacyUpgradeMcp = await app.request(
-      `https://kindred.example.test/mcp?token=${encodeURIComponent(legacyQuiz.agent_token)}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          jsonrpc: '2.0',
-          id: 32,
-          method: 'tools/call',
-          params: { name: 'kindred_publish_quiz', arguments: { questions: sampleQuestions('legacy-v2') } },
-        }),
-      },
-      env,
-    )
-    assert.equal(legacyUpgradeMcp.status, 200)
-    const legacyUpgradeBody = (await legacyUpgradeMcp.json()) as {
-      result?: { structuredContent?: { agent_id?: string; mcp_url?: string; quiz_version?: number } }
-    }
-    assert.equal(legacyUpgradeBody.result?.structuredContent?.agent_id, legacyQuiz.agent_id)
-    assert.equal(legacyUpgradeBody.result?.structuredContent?.quiz_version, 2)
-    assert.equal(legacyUpgradeBody.result?.structuredContent?.mcp_url, 'https://kindred.example.test/mcp')
-
-    const legacyReadBackRes = await app.request(
-      'https://kindred.example.test/api/quiz',
-      {
-        method: 'GET',
-        headers: { Authorization: `Bearer ${legacyQuiz.agent_token}` },
-      },
-      env,
-    )
-    assert.equal(legacyReadBackRes.status, 200)
-    assert.equal(legacyReadBackRes.headers.get('Cache-Control'), 'no-store')
-    const legacyReadBack = (await legacyReadBackRes.json()) as {
-      agent_id: string
-      quiz_version: number
-      published_count: number
-      questions: Array<{ prompt: string; owner_choice: string }>
-    }
-    assert.equal(legacyReadBack.agent_id, legacyQuiz.agent_id)
-    assert.equal(legacyReadBack.quiz_version, 2)
-    assert.equal(legacyReadBack.published_count, 3)
-    assert.equal(legacyReadBack.questions[0]?.prompt, 'legacy-v2 evening habit question 1?')
   })
 
-  test('inbox surfaces waiting pool_status, partner notes, and revealed Phase 2 draw rounds in partner_updates without swallowing completions', async () => {
+  test('MCP inbox surfaces waiting pool_status, partner notes, and revealed Phase 2 draw rounds in partner_updates', async () => {
     const env = makeEnv()
+    const sessionA = await runAnonymousOAuthFlow(env)
+    const sessionB = await runAnonymousOAuthFlow(env)
 
-    const pubARes = await app.request(
-      'https://kindred.example.test/api/quiz',
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ questions: sampleQuestions('alpha') }),
-      },
-      env,
-    )
-    assert.equal(pubARes.status, 201)
-    const agentA = (await pubARes.json()) as { agent_id: string; agent_token: string }
+    const pubA = await mcpToolCall<{ agent_id: string }>(env, sessionA.access_token, 'kindred_publish_quiz', {
+      questions: sampleQuestions('alpha'),
+    })
+    assert.equal(pubA.isError, false)
 
-    const pubBRes = await app.request(
-      'https://kindred.example.test/api/quiz',
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ questions: sampleQuestions('beta') }),
-      },
-      env,
-    )
-    assert.equal(pubBRes.status, 201)
-    const agentB = (await pubBRes.json()) as {
+    const pubB = await mcpToolCall<{
       agent_id: string
-      agent_token: string
       initial_quiz: { pairing_id: string; questions: Array<{ id: string }> }
-    }
-    const pairingId = agentB.initial_quiz.pairing_id
+    }>(env, sessionB.access_token, 'kindred_publish_quiz', {
+      questions: sampleQuestions('beta'),
+    })
+    assert.equal(pubB.isError, false)
+    const pairingId = pubB.data.initial_quiz.pairing_id
 
-    const inboxAPending = (await (
-      await app.request('https://kindred.example.test/api/inbox?max_new=0', {
-        headers: { Authorization: `Bearer ${agentA.agent_token}` },
-      }, env)
-    ).json()) as { pending_quizzes: Array<{ pairing_id: string; questions: Array<{ id: string }> }> }
-    assert.equal(inboxAPending.pending_quizzes.length, 1)
+    const inboxAPending = await mcpToolCall<{
+      my_quiz: { questions: Array<{ id: string; owner_choice: string }> }
+      pending_quizzes: Array<{ pairing_id: string; questions: Array<{ id: string }> }>
+    }>(env, sessionA.access_token, 'kindred_inbox', { max_new: 0 })
+    assert.equal(inboxAPending.data.pending_quizzes.length, 1)
 
-    await app.request(
-      `https://kindred.example.test/api/pairings/${pairingId}/agent-answers`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${agentA.agent_token}` },
-        body: JSON.stringify({
-          answers: inboxAPending.pending_quizzes[0]!.questions.map((q) => ({ question_id: q.id, choice: 'U' })),
-        }),
-      },
-      env,
-    )
+    await mcpToolCall(env, sessionA.access_token, 'kindred_answer_quiz', {
+      pairing_id: pairingId,
+      answers: inboxAPending.data.pending_quizzes[0]!.questions.map((q) => ({ question_id: q.id, choice: 'U' })),
+    })
 
-    const inboxAWaitingAgent = (await (
-      await app.request('https://kindred.example.test/api/inbox?max_new=0', {
-        headers: { Authorization: `Bearer ${agentA.agent_token}` },
-      }, env)
-    ).json()) as { pool_status: { waiting_on_partner_agent_count: number; waiting_on_partner_human_count: number } }
-    assert.equal(inboxAWaitingAgent.pool_status.waiting_on_partner_agent_count, 1)
+    const inboxAWaitingAgent = await mcpToolCall<{
+      pool_status: { waiting_on_partner_agent_count: number; waiting_on_partner_human_count: number }
+    }>(env, sessionA.access_token, 'kindred_inbox', { max_new: 0 })
+    assert.equal(inboxAWaitingAgent.data.pool_status.waiting_on_partner_agent_count, 1)
 
-    const myQuizA = (await (
-      await app.request('https://kindred.example.test/api/quiz', {
-        headers: { Authorization: `Bearer ${agentA.agent_token}` },
-      }, env)
-    ).json()) as { questions: Array<{ id: string; owner_choice: string }> }
+    const myQuizA = inboxAPending.data.my_quiz
+    await mcpToolCall(env, sessionB.access_token, 'kindred_answer_quiz', {
+      pairing_id: pairingId,
+      answers: myQuizA.questions.map((q) => ({ question_id: q.id, choice: q.owner_choice })),
+    })
 
-    await app.request(
-      `https://kindred.example.test/api/pairings/${pairingId}/agent-answers`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${agentB.agent_token}` },
-        body: JSON.stringify({
-          answers: myQuizA.questions.map((q) => ({ question_id: q.id, choice: q.owner_choice })),
-        }),
-      },
-      env,
-    )
-
-    const inboxAMatchReady = (await (
-      await app.request('https://kindred.example.test/api/inbox?max_new=0', {
-        headers: { Authorization: `Bearer ${agentA.agent_token}` },
-      }, env)
-    ).json()) as {
+    const inboxAMatchReady = await mcpToolCall<{
       ready_for_human: Array<{ pairing_id: string; questions: Array<{ id: string }> }>
       partner_updates: Array<{ kind: string; pairing_id: string }>
-    }
-    assert.equal(inboxAMatchReady.partner_updates.some((u) => u.kind === 'match_ready' && u.pairing_id === pairingId), true)
-
-    await app.request(
-      `https://kindred.example.test/api/pairings/${pairingId}/human-answers`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${agentA.agent_token}` },
-        body: JSON.stringify({
-          answers: inboxAMatchReady.ready_for_human[0]!.questions.map((q) => ({ question_id: q.id, choice: 'A' })),
-        }),
-      },
-      env,
+    }>(env, sessionA.access_token, 'kindred_inbox', { max_new: 0 })
+    assert.equal(
+      inboxAMatchReady.data.partner_updates.some((u) => u.kind === 'match_ready' && u.pairing_id === pairingId),
+      true,
     )
 
-    const inboxAWaitingHuman = (await (
-      await app.request('https://kindred.example.test/api/inbox?max_new=0', {
-        headers: { Authorization: `Bearer ${agentA.agent_token}` },
-      }, env)
-    ).json()) as { pool_status: { waiting_on_partner_human_count: number } }
-    assert.equal(inboxAWaitingHuman.pool_status.waiting_on_partner_human_count, 1)
+    await mcpToolCall(env, sessionA.access_token, 'kindred_submit_human_answers', {
+      pairing_id: pairingId,
+      answers: inboxAMatchReady.data.ready_for_human[0]!.questions.map((q) => ({ question_id: q.id, choice: 'A' })),
+    })
 
-    await app.request(
-      `https://kindred.example.test/api/pairings/${pairingId}/human-answers`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${agentB.agent_token}` },
-        body: JSON.stringify({
-          answers: myQuizA.questions.map((q) => ({ question_id: q.id, choice: q.owner_choice })),
-        }),
-      },
-      env,
-    )
+    const inboxAWaitingHuman = await mcpToolCall<{
+      pool_status: { waiting_on_partner_human_count: number }
+    }>(env, sessionA.access_token, 'kindred_inbox', { max_new: 0 })
+    assert.equal(inboxAWaitingHuman.data.pool_status.waiting_on_partner_human_count, 1)
 
-    await app.request(
-      `https://kindred.example.test/api/pairings/${pairingId}/notes`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${agentB.agent_token}` },
-        body: JSON.stringify({ question_id: myQuizA.questions[0]!.id, body: 'This scene felt uncannily familiar' }),
-      },
-      env,
-    )
+    await mcpToolCall(env, sessionB.access_token, 'kindred_submit_human_answers', {
+      pairing_id: pairingId,
+      answers: myQuizA.questions.map((q) => ({ question_id: q.id, choice: q.owner_choice })),
+    })
 
-    const startDrawRes = await app.request(
-      `https://kindred.example.test/api/pairings/${pairingId}/draw`,
-      {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${agentA.agent_token}` },
-      },
-      env,
-    )
-    assert.equal(startDrawRes.status, 201)
-    const drawGame = (await startDrawRes.json()) as {
+    await mcpToolCall(env, sessionB.access_token, 'kindred_post_note', {
+      pairing_id: pairingId,
+      question_id: myQuizA.questions[0]!.id,
+      body: 'This scene felt uncannily familiar',
+    })
+
+    const drawGame = await mcpToolCall<{
       game_id: string
       rounds: Array<{ id: string; role: 'drawer' | 'guesser'; promptOptions?: Array<{ readings: string[] }> }>
-    }
-    const firstRound = drawGame.rounds[0]!
-    const drawerToken = firstRound.role === 'drawer' ? agentA.agent_token : agentB.agent_token
-    const guesserToken = firstRound.role === 'drawer' ? agentB.agent_token : agentA.agent_token
-    const drawerInboxForPrompts = (await (
-      await app.request('https://kindred.example.test/api/inbox?max_new=0', {
-        headers: { Authorization: `Bearer ${drawerToken}` },
-      }, env)
-    ).json()) as { active_draw_turns: Array<{ round: { id: string; promptOptions?: Array<{ readings: string[] }> } }> }
-    const chosenWord = drawerInboxForPrompts.active_draw_turns[0]!.round.promptOptions![0]!.readings[0]!
+    }>(env, sessionA.access_token, 'kindred_start_draw', { pairing_id: pairingId })
+    assert.equal(drawGame.isError, false)
+    const firstRound = drawGame.data.rounds[0]!
+    const drawerToken = firstRound.role === 'drawer' ? sessionA.access_token : sessionB.access_token
+    const guesserToken = firstRound.role === 'drawer' ? sessionB.access_token : sessionA.access_token
 
-    await app.request(
-      `https://kindred.example.test/api/draw/${drawGame.game_id}/rounds/${firstRound.id}/word`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${drawerToken}` },
-        body: JSON.stringify({ word: chosenWord }),
-      },
-      env,
-    )
-    await app.request(
-      `https://kindred.example.test/api/draw/${drawGame.game_id}/rounds/${firstRound.id}/drawing`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${drawerToken}` },
-        body: JSON.stringify({
-          strokes: [{ color: '#1F1D1A', width: 5, points: [[100, 120], [240, 220]] }],
-        }),
-      },
-      env,
-    )
-    await app.request(
-      `https://kindred.example.test/api/draw/${drawGame.game_id}/rounds/${firstRound.id}/guess`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${guesserToken}` },
-        body: JSON.stringify({ choice: 'A', reaction: 'Loved this frame' }),
-      },
-      env,
-    )
+    const drawerInboxForPrompts = await mcpToolCall<{
+      active_draw_turns: Array<{ round: { id: string; promptOptions?: Array<{ readings: string[] }> } }>
+    }>(env, drawerToken, 'kindred_inbox', { max_new: 0 })
+    const chosenWord = drawerInboxForPrompts.data.active_draw_turns[0]!.round.promptOptions![0]!.readings[0]!
 
-    const drawerFinalInbox = (await (
-      await app.request('https://kindred.example.test/api/inbox?max_new=0', {
-        headers: { Authorization: `Bearer ${drawerToken}` },
-      }, env)
-    ).json()) as {
-      revealed_pairings: Array<{
-        pairing_id: string
-        latest_note_author: string | null
-        latest_partner_note: { body: string } | null
-      }>
+    await mcpToolCall(env, drawerToken, 'kindred_pick_word', {
+      game_id: drawGame.data.game_id,
+      round_id: firstRound.id,
+      word: chosenWord,
+    })
+    await mcpToolCall(env, drawerToken, 'kindred_submit_drawing', {
+      game_id: drawGame.data.game_id,
+      round_id: firstRound.id,
+      strokes: [{ color: '#1F1D1A', width: 5, points: [[100, 120], [240, 220]] }],
+    })
+    await mcpToolCall(env, guesserToken, 'kindred_guess_drawing', {
+      game_id: drawGame.data.game_id,
+      round_id: firstRound.id,
+      choice: 'A',
+      reaction: 'Loved this frame',
+    })
+
+    const drawerFinalInbox = await mcpToolCall<{
       recent_draw_reveals: Array<{ round: { id: string; status: string; reaction: string | null } }>
       partner_updates: Array<{ kind: string; round_id?: string; body?: string }>
-    }
-    assert.equal(drawerFinalInbox.recent_draw_reveals.some((r) => r.round.id === firstRound.id && r.round.status === 'revealed'), true)
-    assert.equal(drawerFinalInbox.partner_updates.some((u) => u.kind === 'draw_revealed' && u.round_id === firstRound.id), true)
+    }>(env, drawerToken, 'kindred_inbox', { max_new: 0 })
+    assert.equal(
+      drawerFinalInbox.data.recent_draw_reveals.some((r) => r.round.id === firstRound.id && r.round.status === 'revealed'),
+      true,
+    )
+    assert.equal(
+      drawerFinalInbox.data.partner_updates.some((u) => u.kind === 'draw_revealed' && u.round_id === firstRound.id),
+      true,
+    )
 
-    const agentAFinalInbox = (await (
-      await app.request('https://kindred.example.test/api/inbox?max_new=0', {
-        headers: { Authorization: `Bearer ${agentA.agent_token}` },
-      }, env)
-    ).json()) as {
+    const agentAFinalInbox = await mcpToolCall<{
       revealed_pairings: Array<{
         pairing_id: string
         latest_note_author: string | null
         latest_partner_note: { body: string } | null
       }>
       partner_updates: Array<{ kind: string; body?: string }>
-    }
-    assert.equal(agentAFinalInbox.revealed_pairings[0]?.latest_note_author, 'partner')
-    assert.equal(agentAFinalInbox.revealed_pairings[0]?.latest_partner_note?.body, 'This scene felt uncannily familiar')
-    assert.equal(agentAFinalInbox.partner_updates.some((u) => u.kind === 'partner_note' && u.body === 'This scene felt uncannily familiar'), true)
-    assert.equal(agentAFinalInbox.partner_updates.some((u) => u.kind === 'pairing_revealed'), true)
+    }>(env, sessionA.access_token, 'kindred_inbox', { max_new: 0 })
+    assert.equal(agentAFinalInbox.data.revealed_pairings[0]?.latest_note_author, 'partner')
+    assert.equal(agentAFinalInbox.data.revealed_pairings[0]?.latest_partner_note?.body, 'This scene felt uncannily familiar')
+    assert.equal(
+      agentAFinalInbox.data.partner_updates.some((u) => u.kind === 'partner_note' && u.body === 'This scene felt uncannily familiar'),
+      true,
+    )
+    assert.equal(agentAFinalInbox.data.partner_updates.some((u) => u.kind === 'pairing_revealed'), true)
   })
 
-  test('supports short 2-choice and 3-choice quizzes, enforces contiguous options and valid answer keys, and applies chance-adjusted gate', async () => {
+  test('MCP supports short 2-choice and 3-choice quizzes, enforces contiguous options and valid keys, and applies chance-adjusted gate', async () => {
     const env = makeEnv()
+    const sessionA = await runAnonymousOAuthFlow(env)
+    const sessionB = await runAnonymousOAuthFlow(env)
 
-    const badGap = await app.request(
-      'https://kindred.example.test/api/quiz',
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          questions: [
-            { dimension: '劈裂', prompt: '好事还是有趣的事？', options: { A: '好事', B: '有趣', D: '跳过C' }, owner_choice: 'A' },
-            { dimension: '两难', prompt: '拉不拉杆？', options: { A: '拉', B: '不拉' }, owner_choice: 'A' },
-            { dimension: '投射', prompt: '深夜开门声？', options: { A: '藏人', B: '走错', C: '回家' }, owner_choice: 'C' },
-          ],
-        }),
-      },
-      env,
-    )
-    assert.equal(badGap.status, 400)
+    const badGap = await mcpToolCall(env, sessionA.access_token, 'kindred_publish_quiz', {
+      questions: [
+        { dimension: '劈裂', prompt: '好事还是有趣的事？', options: { A: '好事', B: '有趣', D: '跳过C' }, owner_choice: 'A' },
+        { dimension: '两难', prompt: '拉不拉杆？', options: { A: '拉', B: '不拉' }, owner_choice: 'A' },
+        { dimension: '投射', prompt: '深夜开门声？', options: { A: '藏人', B: '走错', C: '回家' }, owner_choice: 'C' },
+      ],
+    })
+    assert.equal(badGap.isError, true)
 
-    const badOwnerChoice = await app.request(
-      'https://kindred.example.test/api/quiz',
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          questions: [
-            { dimension: '劈裂', prompt: '好事还是有趣的事？', options: { A: '好事', B: '有趣' }, owner_choice: 'C' },
-            { dimension: '两难', prompt: '拉不拉杆？', options: { A: '拉', B: '不拉' }, owner_choice: 'A' },
-            { dimension: '投射', prompt: '深夜开门声？', options: { A: '藏人', B: '走错', C: '回家' }, owner_choice: 'C' },
-          ],
-        }),
-      },
-      env,
-    )
-    assert.equal(badOwnerChoice.status, 400)
+    const badOwnerChoice = await mcpToolCall(env, sessionA.access_token, 'kindred_publish_quiz', {
+      questions: [
+        { dimension: '劈裂', prompt: '好事还是有趣的事？', options: { A: '好事', B: '有趣' }, owner_choice: 'C' },
+        { dimension: '两难', prompt: '拉不拉杆？', options: { A: '拉', B: '不拉' }, owner_choice: 'A' },
+        { dimension: '投射', prompt: '深夜开门声？', options: { A: '藏人', B: '走错', C: '回家' }, owner_choice: 'C' },
+      ],
+    })
+    assert.equal(badOwnerChoice.isError, true)
 
     const shortQuiz = [
       { dimension: '极短劈裂', prompt: '明年要好事还是有趣的事？', options: { A: '好事', B: '有趣的事' }, owner_choice: 'B' },
@@ -1283,119 +1195,59 @@ describe('Streamable HTTP MCP, anonymous OAuth 2.1, CORS, and route boundary com
       { dimension: '瞬间投射', prompt: '深夜开门声第一念头？', options: { A: '藏着人', B: '走错门', C: '等的人回来了' }, owner_choice: 'C' },
       { dimension: '波长站队', prompt: '半夜独食火锅偏哪边？', options: { A: '顶配享受', B: '有点凄凉' }, owner_choice: 'A' },
     ]
-    const pubA = (await (
-      await app.request(
-        'https://kindred.example.test/api/quiz',
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ questions: shortQuiz }),
-        },
-        env,
-      )
-    ).json()) as { agent_token: string }
+    const pubA = await mcpToolCall(env, sessionA.access_token, 'kindred_publish_quiz', { questions: shortQuiz })
+    assert.equal(pubA.isError, false)
 
-    const pubBRes = await app.request(
-      'https://kindred.example.test/api/quiz',
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ questions: shortQuiz }),
-      },
-      env,
-    )
-    assert.equal(pubBRes.status, 201)
-    const pubB = (await pubBRes.json()) as {
-      agent_token: string
+    const pubB = await mcpToolCall<{
       initial_quiz: { pairing_id: string; questions: Array<{ id: string; options: Record<string, string> }> }
-    }
-    const binaryQ = pubB.initial_quiz.questions.find((q) => Object.keys(q.options).length === 2)!
-    const ternaryQ = pubB.initial_quiz.questions.find((q) => Object.keys(q.options).length === 3)!
+    }>(env, sessionB.access_token, 'kindred_publish_quiz', { questions: shortQuiz })
+    assert.equal(pubB.isError, false)
+    const binaryQ = pubB.data.initial_quiz.questions.find((q) => Object.keys(q.options).length === 2)!
+    const ternaryQ = pubB.data.initial_quiz.questions.find((q) => Object.keys(q.options).length === 3)!
     assert.ok(binaryQ)
     assert.ok(ternaryQ)
 
-    const invalidAgentChoice = await app.request(
-      `https://kindred.example.test/api/pairings/${pubB.initial_quiz.pairing_id}/agent-answers`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${pubB.agent_token}` },
-        body: JSON.stringify({
-          answers: pubB.initial_quiz.questions.map((q) => ({
-            question_id: q.id,
-            choice: q.id === binaryQ.id ? 'C' : 'A',
-          })),
-        }),
-      },
-      env,
-    )
-    assert.equal(invalidAgentChoice.status, 400)
+    const invalidAgentChoice = await mcpToolCall(env, sessionB.access_token, 'kindred_answer_quiz', {
+      pairing_id: pubB.data.initial_quiz.pairing_id,
+      answers: pubB.data.initial_quiz.questions.map((q) => ({
+        question_id: q.id,
+        choice: q.id === binaryQ.id ? 'C' : 'A',
+      })),
+    })
+    assert.equal(invalidAgentChoice.isError, true)
 
-    const myQuizA = (await (
-      await app.request('https://kindred.example.test/api/quiz', {
-        headers: { Authorization: `Bearer ${pubA.agent_token}` },
-      }, env)
-    ).json()) as { questions: Array<{ id: string; owner_choice: string }> }
-    const ownerMap = new Map(myQuizA.questions.map((q) => [q.id, q.owner_choice]))
+    const inboxA = await mcpToolCall<{
+      my_quiz: { questions: Array<{ id: string; owner_choice: string }> }
+    }>(env, sessionA.access_token, 'kindred_inbox', { max_new: 0 })
+    const ownerMap = new Map(inboxA.data.my_quiz.questions.map((q) => [q.id, q.owner_choice]))
 
-    const validAgentAns = await app.request(
-      `https://kindred.example.test/api/pairings/${pubB.initial_quiz.pairing_id}/agent-answers`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${pubB.agent_token}` },
-        body: JSON.stringify({
-          answers: pubB.initial_quiz.questions.map((q) => ({
-            question_id: q.id,
-            choice: ownerMap.get(q.id)!,
-          })),
-        }),
-      },
-      env,
-    )
-    assert.equal(validAgentAns.status, 200)
-    const scoreBody = (await validAgentAns.json()) as {
+    const validAgentAns = await mcpToolCall<{
       pairing_status: string
       agent_score: { passed: boolean; required_hit_rate: number }
-    }
-    assert.equal(scoreBody.pairing_status, 'ready_for_humans')
-    assert.equal(scoreBody.agent_score.passed, true)
-    assert.ok(scoreBody.agent_score.required_hit_rate > 0.65 && scoreBody.agent_score.required_hit_rate < 0.7)
+    }>(env, sessionB.access_token, 'kindred_answer_quiz', {
+      pairing_id: pubB.data.initial_quiz.pairing_id,
+      answers: pubB.data.initial_quiz.questions.map((q) => ({
+        question_id: q.id,
+        choice: ownerMap.get(q.id)!,
+      })),
+    })
+    assert.equal(validAgentAns.isError, false)
+    assert.equal(validAgentAns.data.pairing_status, 'ready_for_humans')
+    assert.equal(validAgentAns.data.agent_score.passed, true)
+    assert.ok(validAgentAns.data.agent_score.required_hit_rate > 0.65 && validAgentAns.data.agent_score.required_hit_rate < 0.7)
 
-    const invalidHumanChoice = await app.request(
-      `https://kindred.example.test/api/pairings/${pubB.initial_quiz.pairing_id}/human-answers`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${pubB.agent_token}` },
-        body: JSON.stringify({
-          answers: pubB.initial_quiz.questions.map((q) => ({
-            question_id: q.id,
-            choice: q.id === binaryQ.id ? 'D' : 'A',
-          })),
-        }),
-      },
-      env,
-    )
-    assert.equal(invalidHumanChoice.status, 400)
+    const invalidHumanChoice = await mcpToolCall(env, sessionB.access_token, 'kindred_submit_human_answers', {
+      pairing_id: pubB.data.initial_quiz.pairing_id,
+      answers: pubB.data.initial_quiz.questions.map((q) => ({
+        question_id: q.id,
+        choice: q.id === binaryQ.id ? 'D' : 'A',
+      })),
+    })
+    assert.equal(invalidHumanChoice.isError, true)
   })
 
-  test('GET /skill.md, /llms.txt, /.well-known/mcp.json return expected docs while malformed/unknown paths return 404 instead of SPA HTML', async () => {
+  test('exposes SEP-2640 manifest at /.well-known/mcp.json, serves clean HTML on /, and returns 404 for removed legacy routes', async () => {
     const env = makeEnv()
-    for (const path of ['/skill.md', '/llms.txt']) {
-      const ok = await app.request(`https://kindred.example.test${path}`, { method: 'GET' }, env)
-      assert.equal(ok.status, 200)
-      assert.match(ok.headers.get('Content-Type') ?? '', /text\/markdown/)
-      assert.equal(ok.headers.get('Cache-Control'), 'no-store')
-      assert.match(ok.headers.get('Link') ?? '', /rel="alternate"/)
-      assert.match(ok.headers.get('Link') ?? '', /\/\.well-known\/mcp\.json/)
-      const text = await ok.text()
-      assert.ok(text.includes('https://kindred.example.test/mcp'))
-      assert.ok(text.includes('oauth-protected-resource'))
-      assert.ok(text.includes('Step 0: Preferred Transport'))
-      assert.ok(text.includes('kindred_guide'))
-      assert.ok(text.includes('Session Scenario Sparks'))
-      assert.ok(text.includes('GET https://kindred.example.test/api/quiz'))
-      assert.ok(!text.includes('even with no extra message'))
-      assert.ok(!text.includes('initiate adding this MCP server yourself'))
-    }
 
     const wellKnown = await app.request('https://kindred.example.test/.well-known/mcp.json', { method: 'GET' }, env)
     assert.equal(wellKnown.status, 200)
@@ -1403,94 +1255,89 @@ describe('Streamable HTTP MCP, anonymous OAuth 2.1, CORS, and route boundary com
     assert.equal(wellKnown.headers.get('Cache-Control'), 'no-store')
     const manifest = (await wellKnown.json()) as {
       endpoint?: string
+      homepage?: string
       protocol_version?: string
       auth?: { type?: string; protected_resource_metadata?: string }
-      capabilities?: { tools?: boolean; resources?: boolean; prompts?: boolean }
+      capabilities?: { tools?: boolean; resources?: boolean; prompts?: boolean; extensions?: string[] }
+      skills?: { index?: string; entry?: string }
+      documentation?: string
     }
     assert.equal(manifest.endpoint, 'https://kindred.example.test/mcp')
+    assert.equal(manifest.homepage, 'https://kindred.example.test')
     assert.equal(manifest.protocol_version, '2025-03-26')
     assert.equal(manifest.auth?.type, 'oauth2')
     assert.equal(
       manifest.auth?.protected_resource_metadata,
       'https://kindred.example.test/.well-known/oauth-protected-resource',
     )
-    assert.deepEqual(manifest.capabilities, { tools: true, resources: true, prompts: true })
+    assert.deepEqual(manifest.capabilities, {
+      tools: true,
+      resources: true,
+      prompts: true,
+      extensions: [KINDRED_SKILL_EXTENSION],
+    })
+    assert.deepEqual(manifest.skills, {
+      index: KINDRED_SKILL_INDEX_URI,
+      entry: KINDRED_SKILL_URI,
+    })
+    assert.equal(manifest.documentation, undefined)
 
     const wellKnownHead = await app.request('https://kindred.example.test/.well-known/mcp.json', { method: 'HEAD' }, env)
     assert.equal(wellKnownHead.status, 200)
     assert.equal(await wellKnownHead.text(), '')
+
+    const rootHtml = await app.request(
+      'https://kindred.example.test/',
+      { method: 'GET', headers: { Accept: 'text/markdown', 'User-Agent': 'Claude-User/1.0' } },
+      env,
+    )
+    assert.equal(rootHtml.status, 200)
+    assert.match(rootHtml.headers.get('Content-Type') ?? '', /text\/html/)
+    assert.match(rootHtml.headers.get('Link') ?? '', /\/\.well-known\/mcp\.json/)
+    assert.match(rootHtml.headers.get('Link') ?? '', /\/\.well-known\/oauth-protected-resource/)
+    assert.equal((rootHtml.headers.get('Link') ?? '').includes('/skill.md'), false)
+    const html = await rootHtml.text()
+    assert.equal(html.includes('agent-ssr-skill'), false)
+
+    const rootHead = await app.request('https://kindred.example.test/', { method: 'HEAD' }, env)
+    assert.equal(rootHead.status, 200)
+    assert.equal(await rootHead.text(), '')
 
     const wranglerConfig = JSON.parse(
       readFileSync(fileURLToPath(new URL('../../wrangler.jsonc', import.meta.url)), 'utf-8'),
     ) as { assets?: { run_worker_first?: string[] }; compatibility_flags?: string[] }
     assert.ok(wranglerConfig.assets?.run_worker_first?.includes('/.well-known/*'))
     assert.ok(wranglerConfig.assets?.run_worker_first?.includes('/oauth/*'))
+    assert.ok(wranglerConfig.assets?.run_worker_first?.includes('/skill.md*'))
+    assert.ok(wranglerConfig.assets?.run_worker_first?.includes('/llms.txt'))
+    assert.ok(wranglerConfig.assets?.run_worker_first?.includes('/api/*'))
     assert.ok(wranglerConfig.compatibility_flags?.includes('global_fetch_strictly_public'))
 
-    for (const badPath of [
+    for (const removedOrBadPath of [
+      '/skill.md',
       '/skill.md%EF%BC%8C%E7%84%B6%E5%90%8E',
+      '/llms.txt',
       '/.well-known/other',
       '/oauth/unknown',
       '/api',
-      '/api/none',
+      '/api/quiz',
+      '/api/inbox',
+      '/api/agent',
       '/mcp/extra',
     ]) {
-      const res = await app.request(`https://kindred.example.test${badPath}`, { method: 'GET' }, env)
-      assert.equal(res.status, 404, `Expected 404 on ${badPath}, got ${res.status}`)
-    }
-  })
-
-  test('bare homepage URL / delivers full Kindred protocol directly to AI fetchers and semantic non-JS HTML fallback to browser-UA readers', async () => {
-    const env = makeEnv()
-
-    const agentHeaderCases: Array<Record<string, string>> = [
-      { Accept: 'text/markdown' },
-      { Accept: 'text/markdown, text/html;q=0.9' },
-      { Accept: 'text/plain' },
-      { Accept: '*/*', 'User-Agent': 'curl/8.7.1' },
-      { Accept: 'text/html,application/xhtml+xml,*/*', 'User-Agent': 'Claude-User/1.0' },
-      { Accept: 'text/html,*/*', 'User-Agent': 'ChatGPT-User/1.0' },
-      { Accept: 'text/html,*/*', 'User-Agent': 'Perplexity-User/1.0' },
-    ]
-    for (const headers of agentHeaderCases) {
-      const res = await app.request('https://kindred.example.test/', { method: 'GET', headers }, env)
-      assert.equal(res.status, 200)
-      assert.match(res.headers.get('Content-Type') ?? '', /text\/markdown/)
-      assert.match(res.headers.get('Vary') ?? '', /Accept/)
-      assert.match(res.headers.get('Link') ?? '', /\/skill\.md/)
-      const body = await res.text()
-      assert.ok(body.includes('kindred_publish_quiz'))
-      assert.ok(body.includes('https://kindred.example.test/mcp'))
+      const res = await app.request(`https://kindred.example.test${removedOrBadPath}`, { method: 'GET' }, env)
+      assert.equal(res.status, 404, `Expected 404 on ${removedOrBadPath}, got ${res.status}`)
     }
 
-    const browserHtmlRes = await app.request(
-      'https://kindred.example.test/',
+    const postApiQuiz = await app.request(
+      'https://kindred.example.test/api/quiz',
       {
-        method: 'GET',
-        headers: {
-          Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-          'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36',
-          'Sec-Fetch-Dest': 'document',
-          'Sec-Fetch-Mode': 'navigate',
-        },
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ questions: sampleQuestions('removed') }),
       },
       env,
     )
-    assert.equal(browserHtmlRes.status, 200)
-    assert.match(browserHtmlRes.headers.get('Content-Type') ?? '', /text\/html/)
-    assert.match(browserHtmlRes.headers.get('Link') ?? '', /\/skill\.md/)
-    const html = await browserHtmlRes.text()
-    assert.ok(html.includes('class="agent-ssr-skill"'))
-    assert.ok(html.includes('kindred_publish_quiz'))
-    assert.ok(html.includes('https://kindred.example.test/mcp'))
-
-    const headRes = await app.request(
-      'https://kindred.example.test/',
-      { method: 'HEAD', headers: { Accept: 'text/markdown' } },
-      env,
-    )
-    assert.equal(headRes.status, 200)
-    assert.match(headRes.headers.get('Content-Type') ?? '', /text\/markdown/)
-    assert.equal(await headRes.text(), '')
+    assert.equal(postApiQuiz.status, 404)
   })
 })

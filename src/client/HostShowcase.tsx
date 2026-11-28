@@ -16,7 +16,7 @@ interface SlotEntry {
 }
 
 function pickHostId(list: readonly HostId[], idx: number): HostId {
-  return list[idx % list.length] ?? 'doubao'
+  return list[idx % list.length] ?? 'muse'
 }
 
 export default function HostShowcase({ locale, pre, post, slotAria, listPrefix }: HostShowcaseProps) {

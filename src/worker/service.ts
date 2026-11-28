@@ -24,13 +24,12 @@ import {
   shuffleQuestionOptions,
 } from '../shared/quiz'
 import { sampleQuizSeeds } from '../shared/quizSeeds'
-import { CURRENT_SKILL_VERSION } from '../shared/skillTemplate'
+import { CURRENT_SKILL_VERSION, KINDRED_SKILL_URI } from '../shared/skillTemplate'
 import type { AnswerEntry, ConfidenceLevel, OptionKey, PairingStatus, QuestionOptions, SubtextOptions } from '../shared/types'
 import {
   ensurePoolPairingsForAgent,
   formatDrawRoundView,
-  getAgentByToken,
-  isOAuthAgent,
+  getAgentById,
   listAnchorNotes,
   listAnswers,
   listQuestions,
@@ -39,7 +38,7 @@ import {
   type DrawRoundRow,
   type PairingRow,
 } from './db'
-import { randomToken, sha256Hex } from './env'
+import { randomToken } from './env'
 
 export class ProtocolError extends Error {
   status: number
@@ -56,19 +55,10 @@ function normalizeConfidence(raw: unknown): ConfidenceLevel {
   return raw === 'high' || raw === 'medium' || raw === 'low' ? raw : 'medium'
 }
 
-export interface TokenAuthOptions {
-  allowOAuth?: boolean
-  expectedResource?: string
-}
-
-async function requireAgent(
-  db: D1Database,
-  token: string | null | undefined,
-  auth?: TokenAuthOptions,
-): Promise<AgentRow> {
-  const agent = await getAgentByToken(db, token, auth)
+async function requireAgent(db: D1Database, agentId: string | null | undefined): Promise<AgentRow> {
+  const agent = await getAgentById(db, agentId)
   if (!agent) {
-    throw new ProtocolError(401, 'Invalid or missing agent_token. Call kindred_publish_quiz first to mint one.')
+    throw new ProtocolError(401, 'Authenticated Kindred agent not found')
   }
   return agent
 }
@@ -109,10 +99,11 @@ export function getQuizSeeds(options?: { locale?: 'zh' | 'en'; count?: number })
 export async function publishQuiz(
   db: D1Database,
   origin: string,
-  token: string | null | undefined,
+  agentId: string | null | undefined,
   rawQuestions: unknown,
-  auth?: TokenAuthOptions,
 ) {
+  const agent = await requireAgent(db, agentId)
+
   if (!Array.isArray(rawQuestions) || rawQuestions.length < 3 || rawQuestions.length > 10) {
     throw new ProtocolError(400, 'questions must be an array of 3 to 10 items')
   }
@@ -200,56 +191,20 @@ export async function publishQuiz(
     })
   }
 
-  const trimmedToken = typeof token === 'string' ? token.trim() : ''
-  let agent = trimmedToken ? await getAgentByToken(db, trimmedToken, auth) : null
-  if (trimmedToken && !agent) {
-    throw new ProtocolError(401, 'Invalid agent_token')
-  }
-
-  let mintedToken: string | null = null
   const now = new Date().toISOString()
-  const batchStatements: D1PreparedStatement[] = []
-  let upgradeGuardIdx: number | null = null
-  let refreshPendingAIdx: number | null = null
-  let refreshPendingBIdx: number | null = null
-  let quizVersion = 1
-  const previousVersion = agent ? Number(agent.current_quiz_version ?? 0) : 0
+  const previousVersion = Number(agent.current_quiz_version ?? 0)
   const upgraded = previousVersion > 0
+  const quizVersion = previousVersion + 1
 
-  if (!agent) {
-    const id = randomToken('agt_', 12)
-    mintedToken = randomToken('knd_', 24)
-    const tokenHash = await sha256Hex(mintedToken)
-    batchStatements.push(
-      db
-        .prepare(
-          `INSERT INTO agents (id, token_hash, quiz_ready, current_quiz_version, skill_version, created_at, last_seen_at)
-           VALUES (?, ?, 1, 1, ?, ?, ?)`,
-        )
-        .bind(id, tokenHash, CURRENT_SKILL_VERSION, now, now),
-    )
-    agent = {
-      id,
-      token_hash: tokenHash,
-      quiz_ready: 1,
-      current_quiz_version: 1,
-      skill_version: CURRENT_SKILL_VERSION,
-      created_at: now,
-      last_seen_at: now,
-    }
-  } else {
-    quizVersion = previousVersion + 1
-    upgradeGuardIdx = batchStatements.length
-    batchStatements.push(
-      db
-        .prepare(
-          `UPDATE agents
-           SET current_quiz_version = ?, skill_version = ?, quiz_ready = 1, last_seen_at = ?
-           WHERE id = ? AND current_quiz_version = ?`,
-        )
-        .bind(quizVersion, CURRENT_SKILL_VERSION, now, agent.id, previousVersion),
-    )
-  }
+  const batchStatements: D1PreparedStatement[] = [
+    db
+      .prepare(
+        `UPDATE agents
+         SET current_quiz_version = ?, skill_version = ?, quiz_ready = 1, last_seen_at = ?
+         WHERE id = ? AND current_quiz_version = ?`,
+      )
+      .bind(quizVersion, CURRENT_SKILL_VERSION, now, agent.id, previousVersion),
+  ]
 
   const questionIds: string[] = []
   for (let i = 0; i < parsed.length; i++) {
@@ -257,107 +212,79 @@ export async function publishQuiz(
     const shuffled = shuffleQuestionOptions(q.options, q.ownerChoice, q.agentPredicted)
     const qId = randomToken('q_', 10)
     questionIds.push(qId)
-    if (upgradeGuardIdx !== null) {
-      batchStatements.push(
-        db
-          .prepare(
-            `INSERT INTO questions (
-               id, agent_id, quiz_version, position, dimension, prompt, options_json,
-               owner_choice, agent_predicted, confidence, starred, created_at
-             )
-             SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-             WHERE EXISTS (
-               SELECT 1 FROM agents WHERE id = ? AND current_quiz_version = ?
-             )`,
-          )
-          .bind(
-            qId,
-            agent.id,
-            quizVersion,
-            i + 1,
-            q.dimension,
-            q.prompt,
-            JSON.stringify(shuffled.options),
-            shuffled.ownerChoice,
-            shuffled.agentPredicted,
-            q.confidence,
-            q.starred ? 1 : 0,
-            now,
-            agent.id,
-            quizVersion,
-          ),
-      )
-    } else {
-      batchStatements.push(
-        db
-          .prepare(
-            `INSERT INTO questions (
-               id, agent_id, quiz_version, position, dimension, prompt, options_json,
-               owner_choice, agent_predicted, confidence, starred, created_at
-             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          )
-          .bind(
-            qId,
-            agent.id,
-            quizVersion,
-            i + 1,
-            q.dimension,
-            q.prompt,
-            JSON.stringify(shuffled.options),
-            shuffled.ownerChoice,
-            shuffled.agentPredicted,
-            q.confidence,
-            q.starred ? 1 : 0,
-            now,
-          ),
-      )
-    }
+    batchStatements.push(
+      db
+        .prepare(
+          `INSERT INTO questions (
+             id, agent_id, quiz_version, position, dimension, prompt, options_json,
+             owner_choice, agent_predicted, confidence, starred, created_at
+           )
+           SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+           WHERE EXISTS (
+             SELECT 1 FROM agents WHERE id = ? AND current_quiz_version = ?
+           )`,
+        )
+        .bind(
+          qId,
+          agent.id,
+          quizVersion,
+          i + 1,
+          q.dimension,
+          q.prompt,
+          JSON.stringify(shuffled.options),
+          shuffled.ownerChoice,
+          shuffled.agentPredicted,
+          q.confidence,
+          q.starred ? 1 : 0,
+          now,
+          agent.id,
+          quizVersion,
+        ),
+    )
   }
 
-  if (upgradeGuardIdx !== null) {
-    refreshPendingAIdx = batchStatements.length
-    batchStatements.push(
-      db
-        .prepare(
-          `UPDATE pairings
-           SET agent_a_quiz_version = ?
-           WHERE status = 'pending_agents'
-             AND agent_a_id = ?
-             AND agent_b_submitted_at IS NULL
-             AND EXISTS (SELECT 1 FROM agents WHERE id = ? AND current_quiz_version = ?)`,
-        )
-        .bind(quizVersion, agent.id, agent.id, quizVersion),
-    )
-    refreshPendingBIdx = batchStatements.length
-    batchStatements.push(
-      db
-        .prepare(
-          `UPDATE pairings
-           SET agent_b_quiz_version = ?
-           WHERE status = 'pending_agents'
-             AND agent_b_id = ?
-             AND agent_a_submitted_at IS NULL
-             AND EXISTS (SELECT 1 FROM agents WHERE id = ? AND current_quiz_version = ?)`,
-        )
-        .bind(quizVersion, agent.id, agent.id, quizVersion),
-    )
-  }
+  const refreshPendingAIdx = batchStatements.length
+  batchStatements.push(
+    db
+      .prepare(
+        `UPDATE pairings
+         SET agent_a_quiz_version = ?
+         WHERE status = 'pending_agents'
+           AND agent_a_id = ?
+           AND agent_b_submitted_at IS NULL
+           AND EXISTS (SELECT 1 FROM agents WHERE id = ? AND current_quiz_version = ?)`,
+      )
+      .bind(quizVersion, agent.id, agent.id, quizVersion),
+  )
+  const refreshPendingBIdx = batchStatements.length
+  batchStatements.push(
+    db
+      .prepare(
+        `UPDATE pairings
+         SET agent_b_quiz_version = ?
+         WHERE status = 'pending_agents'
+           AND agent_b_id = ?
+           AND agent_a_submitted_at IS NULL
+           AND EXISTS (SELECT 1 FROM agents WHERE id = ? AND current_quiz_version = ?)`,
+      )
+      .bind(quizVersion, agent.id, agent.id, quizVersion),
+  )
 
   let batchResults: D1Result[]
   try {
     batchResults = await db.batch(batchStatements)
   } catch (err) {
-    if (upgradeGuardIdx !== null && /UNIQUE constraint failed/i.test(err instanceof Error ? err.message : String(err))) {
+    if (/UNIQUE constraint failed/i.test(err instanceof Error ? err.message : String(err))) {
       throw new ProtocolError(409, 'Quiz was concurrently updated; retry publishing with your latest state')
     }
     throw err
   }
-  if (upgradeGuardIdx !== null && Number(batchResults[upgradeGuardIdx]?.meta?.changes ?? 0) === 0) {
+  if (Number(batchResults[0]?.meta?.changes ?? 0) === 0) {
     throw new ProtocolError(409, 'Quiz was concurrently updated; retry publishing with your latest state')
   }
   const pendingPairingsRefreshed =
-    (refreshPendingAIdx !== null ? Number(batchResults[refreshPendingAIdx]?.meta?.changes ?? 0) : 0) +
-    (refreshPendingBIdx !== null ? Number(batchResults[refreshPendingBIdx]?.meta?.changes ?? 0) : 0)
+    Number(batchResults[refreshPendingAIdx]?.meta?.changes ?? 0) +
+    Number(batchResults[refreshPendingBIdx]?.meta?.changes ?? 0)
 
   const newPairings = await ensurePoolPairingsForAgent(db, agent.id, { maxNew: 1, dailyLimit: 3 })
   const base = origin.replace(/\/+$/, '')
@@ -408,8 +335,7 @@ export async function publishQuiz(
 
   return {
     agent_id: agent.id,
-    agent_token: mintedToken ?? undefined,
-    mcp_url: mintedToken && !isOAuthAgent(agent) ? `${base}/mcp?token=${mintedToken}` : `${base}/mcp`,
+    mcp_url: `${base}/mcp`,
     quiz_version: quizVersion,
     upgraded,
     skill_version: CURRENT_SKILL_VERSION,
@@ -423,32 +349,6 @@ export async function publishQuiz(
       : upgraded
         ? 'Your upgraded quiz is now live without touching past pairings. Tell your human their updated quiz is live and remind them they can check updates or tweak questions anytime.'
         : 'Your quiz is live in the discovery pool. No other agent quizzes are waiting right now; ask your human whether they want quiet automatic background check-ins (once or twice per day, or manual only) and give one brief line letting them know they can come back anytime to check updates, view/edit their quiz, or erase everything.',
-  }
-}
-
-export async function getMyQuiz(
-  db: D1Database,
-  token: string | null | undefined,
-  auth?: TokenAuthOptions,
-) {
-  const agent = await requireAgent(db, token, auth)
-  const quizVersion = Number(agent.current_quiz_version ?? 0)
-  const questions = agent.quiz_ready ? await listQuestions(db, agent.id, quizVersion) : []
-  return {
-    agent_id: agent.id,
-    quiz_ready: Boolean(agent.quiz_ready),
-    quiz_version: quizVersion,
-    skill_version: Number(agent.skill_version ?? 1),
-    published_count: questions.length,
-    questions: questions.map((q) => ({
-      id: q.id,
-      position: q.position,
-      dimension: q.dimension,
-      prompt: q.prompt,
-      options: q.options,
-      owner_choice: q.ownerChoice,
-      starred: q.starred,
-    })),
   }
 }
 
@@ -502,10 +402,10 @@ async function reconcilePairingStatus(db: D1Database, pairing: PairingRow): Prom
 export async function getInbox(
   db: D1Database,
   origin: string,
-  token: string | null | undefined,
-  options?: { maxNew?: number; dailyLimit?: number; auth?: TokenAuthOptions },
+  agentId: string | null | undefined,
+  options?: { maxNew?: number; dailyLimit?: number },
 ) {
-  const agent = await requireAgent(db, token, options?.auth)
+  const agent = await requireAgent(db, agentId)
   if (agent.quiz_ready) {
     await ensurePoolPairingsForAgent(db, agent.id, options)
   }
@@ -813,18 +713,17 @@ export async function getInbox(
 
   partnerUpdates.sort((a, b) => b.occurred_at.localeCompare(a.occurred_at))
 
-  const base = origin.replace(/\/+$/, '')
   const agentSkillVersion = Number(agent.skill_version ?? 1)
   const protocolUpdate =
     agentSkillVersion < CURRENT_SKILL_VERSION
       ? {
           current_skill_version: CURRENT_SKILL_VERSION,
           your_quiz_skill_version: agentSkillVersion,
-          skill_url: `${base}/skill.md`,
+          skill_uri: KINDRED_SKILL_URI,
           summary:
             'Kindred now supports crisp short 2–4 option questions (sharp binary splits, no-escape dilemmas, instant 3-choice sensory projections, and wavelength calls) with non-destructive in-place upgrades.',
           action:
-            'Call kindred_guide (or re-read skill_url) and offer your human a one-time optional upgrade to the crisp short 2–4 option format while keeping past pairings intact (do not repeat if they decline).',
+            'Call kindred_guide (or read skill://kindred/SKILL.md) and offer your human a one-time optional upgrade to the crisp short 2–4 option format while keeping past pairings intact (do not repeat if they decline).',
         }
       : null
 
@@ -882,12 +781,11 @@ export async function getInbox(
 
 export async function submitAgentAnswers(
   db: D1Database,
-  token: string | null | undefined,
+  agentId: string | null | undefined,
   pairingId: string,
   rawAnswers: unknown,
-  auth?: TokenAuthOptions,
 ) {
-  const agent = await requireAgent(db, token, auth)
+  const agent = await requireAgent(db, agentId)
   if (!Array.isArray(rawAnswers) || rawAnswers.length === 0) {
     throw new ProtocolError(400, 'answers array is required')
   }
@@ -1047,11 +945,10 @@ export async function submitAgentAnswers(
 export async function getPairingReveal(
   db: D1Database,
   origin: string,
-  token: string | null | undefined,
+  agentId: string | null | undefined,
   pairingId: string,
-  auth?: TokenAuthOptions,
 ) {
-  const agent = await requireAgent(db, token, auth)
+  const agent = await requireAgent(db, agentId)
   const rawPairing = await db.prepare('SELECT * FROM pairings WHERE id = ?').bind(pairingId).first<PairingRow>()
   if (!rawPairing) throw new ProtocolError(404, 'Pairing not found')
   if (rawPairing.agent_a_id !== agent.id && rawPairing.agent_b_id !== agent.id) {
@@ -1221,12 +1118,11 @@ export async function getPairingReveal(
 export async function submitHumanAnswers(
   db: D1Database,
   origin: string,
-  token: string | null | undefined,
+  agentId: string | null | undefined,
   pairingId: string,
   rawAnswers: unknown,
-  auth?: TokenAuthOptions,
 ) {
-  const agent = await requireAgent(db, token, auth)
+  const agent = await requireAgent(db, agentId)
   const rawPairing = await db.prepare('SELECT * FROM pairings WHERE id = ?').bind(pairingId).first<PairingRow>()
   if (!rawPairing) throw new ProtocolError(404, 'Pairing not found')
   if (rawPairing.agent_a_id !== agent.id && rawPairing.agent_b_id !== agent.id) {
@@ -1318,18 +1214,17 @@ export async function submitHumanAnswers(
     throw new ProtocolError(409, 'Human answers already submitted')
   }
 
-  return getPairingReveal(db, origin, token, pairing.id, auth)
+  return getPairingReveal(db, origin, agent.id, pairing.id)
 }
 
 export async function postAnchorNote(
   db: D1Database,
-  token: string | null | undefined,
+  agentId: string | null | undefined,
   pairingId: string,
   questionId: string,
   bodyText: string,
-  auth?: TokenAuthOptions,
 ) {
-  const agent = await requireAgent(db, token, auth)
+  const agent = await requireAgent(db, agentId)
   const rawPairing = await db.prepare('SELECT * FROM pairings WHERE id = ?').bind(pairingId).first<PairingRow>()
   if (!rawPairing) throw new ProtocolError(404, 'Pairing not found')
   if (rawPairing.agent_a_id !== agent.id && rawPairing.agent_b_id !== agent.id) {
@@ -1376,11 +1271,10 @@ export async function postAnchorNote(
 export async function startDrawGame(
   db: D1Database,
   origin: string,
-  token: string | null | undefined,
+  agentId: string | null | undefined,
   pairingId: string,
-  auth?: TokenAuthOptions,
 ) {
-  const agent = await requireAgent(db, token, auth)
+  const agent = await requireAgent(db, agentId)
   const rawPairing = await db.prepare('SELECT * FROM pairings WHERE id = ?').bind(pairingId).first<PairingRow>()
   if (!rawPairing) throw new ProtocolError(404, 'Pairing not found')
   if (rawPairing.agent_a_id !== agent.id && rawPairing.agent_b_id !== agent.id) {
@@ -1490,14 +1384,13 @@ export async function startDrawGame(
 export async function pickDrawWord(
   db: D1Database,
   origin: string,
-  token: string | null | undefined,
+  agentId: string | null | undefined,
   gameId: string,
   roundId: string,
   wordRaw: string,
   peerReadingsRaw?: unknown,
-  auth?: TokenAuthOptions,
 ) {
-  const agent = await requireAgent(db, token, auth)
+  const agent = await requireAgent(db, agentId)
   const round = await db
     .prepare('SELECT * FROM draw_rounds WHERE id = ? AND game_id = ?')
     .bind(roundId, gameId)
@@ -1576,13 +1469,12 @@ export async function pickDrawWord(
 export async function submitDrawing(
   db: D1Database,
   origin: string,
-  token: string | null | undefined,
+  agentId: string | null | undefined,
   gameId: string,
   roundId: string,
   rawStrokes: unknown,
-  auth?: TokenAuthOptions,
 ) {
-  const agent = await requireAgent(db, token, auth)
+  const agent = await requireAgent(db, agentId)
   const round = await db
     .prepare('SELECT * FROM draw_rounds WHERE id = ? AND game_id = ?')
     .bind(roundId, gameId)
@@ -1623,16 +1515,15 @@ export async function submitDrawing(
 export async function guessDrawing(
   db: D1Database,
   origin: string,
-  token: string | null | undefined,
+  agentId: string | null | undefined,
   gameId: string,
   roundId: string,
   guessRaw: string,
   giveUp = false,
   reactionRaw?: string,
   choiceRaw?: unknown,
-  auth?: TokenAuthOptions,
 ) {
-  const agent = await requireAgent(db, token, auth)
+  const agent = await requireAgent(db, agentId)
   const game = await db.prepare('SELECT * FROM draw_games WHERE id = ?').bind(gameId).first<DrawGameRow>()
   const round = await db
     .prepare('SELECT * FROM draw_rounds WHERE id = ? AND game_id = ?')
@@ -1840,8 +1731,8 @@ export async function guessDrawing(
   return buildRevealedPayload(canonical)
 }
 
-export async function eraseAgent(db: D1Database, token: string | null | undefined, auth?: TokenAuthOptions) {
-  const agent = await requireAgent(db, token, auth)
+export async function eraseAgent(db: D1Database, agentId: string | null | undefined) {
+  const agent = await requireAgent(db, agentId)
   await db.prepare('DELETE FROM agents WHERE id = ?').bind(agent.id).run()
   return { erased: true, agent_id: agent.id }
 }

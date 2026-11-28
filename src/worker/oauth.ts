@@ -91,7 +91,7 @@ export function buildProtectedResourceMetadata(origin: string) {
     scopes_supported: [DEFAULT_SCOPE],
     bearer_methods_supported: ['header'],
     resource_name: 'Kindred',
-    resource_documentation: `${base}/skill.md`,
+    resource_documentation: base,
   }
 }
 

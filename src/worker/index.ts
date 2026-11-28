@@ -1,11 +1,10 @@
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
-import { renderSkillMarkdown } from '../shared/skillTemplate'
 import {
-  DISCOVERY_LINK_HEADER,
-  injectAgentFallbackHtml,
-  prefersMarkdownResponse,
-} from './agentDiscovery'
+  KINDRED_SKILL_EXTENSION,
+  KINDRED_SKILL_INDEX_URI,
+  KINDRED_SKILL_URI,
+} from '../shared/skillTemplate'
 import type { Env } from './env'
 import { createMcpRoutes } from './mcp'
 import {
@@ -13,9 +12,11 @@ import {
   buildProtectedResourceMetadata,
   createOAuthRoutes,
 } from './oauth'
-import { createProtocolRoutes } from './routes/protocol'
 
 const app = new Hono<{ Bindings: Env }>({ strict: false })
+
+const DISCOVERY_LINK_HEADER =
+  '</.well-known/mcp.json>; rel="describedby"; type="application/json", </.well-known/oauth-protected-resource>; rel="oauth-protected-resource"; type="application/json"'
 
 const publicCors = cors({
   origin: '*',
@@ -34,36 +35,12 @@ const publicCors = cors({
 
 app.use('/mcp', publicCors)
 app.use('/mcp/*', publicCors)
-app.use('/api/*', publicCors)
 app.use('/.well-known/*', publicCors)
 app.use('/oauth/register', publicCors)
 app.use('/oauth/token', publicCors)
 app.use('/oauth/revoke', publicCors)
-app.use('/skill.md', publicCors)
-app.use('/llms.txt', publicCors)
 app.use('/img/*', publicCors)
 app.use('/media/*', publicCors)
-
-function buildMarkdownSkillResponse(
-  origin: string,
-  isHead: boolean,
-  varyHeader?: string,
-  locale?: 'zh' | 'en',
-): Response {
-  const body = renderSkillMarkdown(origin, { locale })
-  const headers: Record<string, string> = {
-    'Content-Type': 'text/markdown; charset=utf-8',
-    'Cache-Control': 'no-store',
-    Link: DISCOVERY_LINK_HEADER,
-  }
-  if (varyHeader) headers.Vary = varyHeader
-  return new Response(isHead ? null : body, { status: 200, headers })
-}
-
-function parseLocaleParam(url: URL): 'zh' | 'en' | undefined {
-  const raw = url.searchParams.get('locale')?.trim().toLowerCase()
-  return raw === 'zh' || raw === 'en' ? raw : undefined
-}
 
 function buildWellKnownJsonResponse(isHead: boolean, payload: unknown): Response {
   return new Response(isHead ? null : JSON.stringify(payload, null, 2), {
@@ -97,9 +74,10 @@ app.on(['GET', 'HEAD'], '/.well-known/mcp.json', (c) => {
     name: 'kindred',
     title: 'Kindred',
     description:
-      'Open personal-agent matching protocol — blind personal quizzes, silent agent screening, and blind visual subtext games inside your own AI chat.',
+      'Open personal-agent matching protocol — blind ultra-short quizzes, silent agent screening, and blind visual subtext games inside your own AI chat.',
     protocol_version: '2025-03-26',
     endpoint: `${origin}/mcp`,
+    homepage: origin,
     transport: 'streamable-http',
     transports: ['streamable-http'],
     auth: {
@@ -113,41 +91,27 @@ app.on(['GET', 'HEAD'], '/.well-known/mcp.json', (c) => {
       tools: true,
       resources: true,
       prompts: true,
+      extensions: [KINDRED_SKILL_EXTENSION],
     },
-    documentation: `${origin}/skill.md`,
+    skills: {
+      index: KINDRED_SKILL_INDEX_URI,
+      entry: KINDRED_SKILL_URI,
+    },
   }
   return buildWellKnownJsonResponse(c.req.method === 'HEAD', manifest)
 })
 
-app.on(['GET', 'HEAD'], '/skill.md', (c) => {
-  const url = new URL(c.req.url)
-  return buildMarkdownSkillResponse(url.origin, c.req.method === 'HEAD', undefined, parseLocaleParam(url))
-})
-
-app.on(['GET', 'HEAD'], '/llms.txt', (c) => {
-  const url = new URL(c.req.url)
-  return buildMarkdownSkillResponse(url.origin, c.req.method === 'HEAD', undefined, parseLocaleParam(url))
-})
-
 app.on(['GET', 'HEAD'], '/', async (c) => {
-  const url = new URL(c.req.url)
-  const origin = url.origin
   const isHead = c.req.method === 'HEAD'
-  if (prefersMarkdownResponse(c.req.raw)) {
-    return buildMarkdownSkillResponse(origin, isHead, 'Accept, User-Agent', parseLocaleParam(url))
-  }
-
   const assetUrl = new URL('/index.html', c.req.url)
   const assetRes = await c.env.ASSETS.fetch(new Request(assetUrl.toString(), { method: 'GET' }))
   if (!assetRes.ok) return assetRes
   const rawHtml = await assetRes.text()
-  const hydratedHtml = injectAgentFallbackHtml(rawHtml, origin)
-  return new Response(isHead ? null : hydratedHtml, {
+  return new Response(isHead ? null : rawHtml, {
     status: 200,
     headers: {
       'Content-Type': 'text/html; charset=utf-8',
       'Cache-Control': 'public, max-age=0, must-revalidate',
-      Vary: 'Accept, User-Agent',
       Link: DISCOVERY_LINK_HEADER,
     },
   })
@@ -234,17 +198,19 @@ app.on(['GET', 'HEAD'], '/media/*', async (c) => {
 
 app.route('/mcp', createMcpRoutes())
 app.route('/oauth', createOAuthRoutes())
-app.route('/api', createProtocolRoutes())
 
 app.all('/mcp/*', (c) => c.notFound())
 app.all('/oauth/*', (c) => c.notFound())
 app.all('/.well-known/*', (c) => c.notFound())
 app.all('/api', (c) => c.notFound())
 app.all('/api/*', (c) => c.notFound())
+app.all('/skill.md', (c) => c.notFound())
+app.all('/skill.md/*', (c) => c.notFound())
+app.all('/llms.txt', (c) => c.notFound())
 
 app.all('*', async (c) => {
   const pathname = new URL(c.req.url).pathname
-  if (pathname.startsWith('/skill.md') && pathname !== '/skill.md') {
+  if (pathname.startsWith('/skill.md')) {
     return c.notFound()
   }
   return c.env.ASSETS.fetch(c.req.raw)

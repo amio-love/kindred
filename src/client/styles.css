@@ -509,9 +509,10 @@ html[lang='zh-CN'] .slip__head {
 }
 
 .slip__text {
-  margin: 9px 0 0;
-  font-size: 16px;
-  line-height: 1.62;
+  margin: 10px 0 0;
+  font-family: var(--mono);
+  font-size: clamp(13.5px, 0.78rem + 0.2vw, 15px);
+  line-height: 1.55;
   font-weight: 500;
   color: var(--paper-ink);
   user-select: text;
@@ -1101,9 +1102,6 @@ html[lang='en'] .foot__mission {
   .hero__copy > .trust {
     order: 7;
   }
-  .slip__url {
-    font-size: 14.5px;
-  }
   .chap__sub {
     display: none;
   }
@@ -1118,19 +1116,21 @@ html[lang='en'] .foot__mission {
   }
   .slip {
     rotate: 0deg;
-    padding: 14px 16px 12px;
+    padding: 14px 16px 14px;
   }
   .slip:hover {
     translate: none;
   }
   .slip__text {
-    font-size: 15.5px;
-  }
-  .slip__note {
-    display: none;
+    font-size: 13px;
   }
   .slip__foot {
-    justify-content: flex-end;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+  .slip__note {
+    text-align: center;
   }
   .copy {
     width: 100%;

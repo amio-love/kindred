@@ -3,12 +3,17 @@ import { KINDRED_TOOLS } from '../shared/mcpTools'
 import { sampleQuizSeeds } from '../shared/quizSeeds'
 import {
   CURRENT_SKILL_VERSION,
+  KINDRED_SKILL_EXTENSION,
+  KINDRED_SKILL_FRONTMATTER,
+  KINDRED_SKILL_INDEX_URI,
+  KINDRED_SKILL_URI,
+  renderGuideWithSparks,
   renderMcpInstructions,
-  renderSkillMarkdown,
+  renderMcpSkillDocument,
   renderUpgradePrompt,
 } from '../shared/skillTemplate'
-import { getAgentByToken } from './db'
-import { extractBearerToken, type Env } from './env'
+import { getAgentByOAuthToken } from './db'
+import { extractBearerToken, sha256Hex, type Env } from './env'
 import { buildWwwAuthenticateHeader } from './oauth'
 import {
   ProtocolError,
@@ -34,6 +39,7 @@ interface JsonRpcRequest {
 }
 
 const PROTOCOL_VERSION = '2025-03-26'
+const SERVER_VERSION = '3.0.0'
 
 function rpcResult(id: string | number | null | undefined, result: unknown) {
   return { jsonrpc: '2.0', id: id ?? null, result }
@@ -43,19 +49,39 @@ function rpcError(id: string | number | null | undefined, code: number, message:
   return { jsonrpc: '2.0', id: id ?? null, error: { code, message } }
 }
 
+async function buildSkillDescriptor(origin: string) {
+  const doc = renderMcpSkillDocument(origin)
+  const size = new TextEncoder().encode(doc).byteLength
+  const digest = `sha256:${await sha256Hex(doc)}`
+  return {
+    doc,
+    skill: {
+      uri: KINDRED_SKILL_URI,
+      frontmatter: KINDRED_SKILL_FRONTMATTER,
+      resources: [
+        {
+          uri: KINDRED_SKILL_URI,
+          digest,
+          size,
+        },
+      ],
+    },
+  }
+}
+
 async function dispatchToolCall(
   db: D1Database,
   origin: string,
-  authenticatedToken: string,
-  authOptions: { allowOAuth: boolean; expectedResource: string },
+  agentId: string,
   name: string,
   args: Record<string, unknown>,
 ) {
-  const argToken = typeof args.agent_token === 'string' && args.agent_token.trim() ? args.agent_token.trim() : null
-  if (argToken && argToken !== authenticatedToken) {
-    throw new ProtocolError(403, 'agent_token argument does not match the authenticated MCP session')
+  if (typeof args.agent_token === 'string' && args.agent_token.trim().length > 0) {
+    throw new ProtocolError(
+      400,
+      'agent_token is not supported; MCP requests authenticate automatically via OAuth 2.1 Bearer token',
+    )
   }
-  const token = authenticatedToken
 
   switch (name) {
     case 'kindred_guide': {
@@ -63,9 +89,10 @@ async function dispatchToolCall(
       const seeds = sampleQuizSeeds(8)
       return {
         current_skill_version: CURRENT_SKILL_VERSION,
+        skill_uri: KINDRED_SKILL_URI,
         mcp_url: `${origin.replace(/\/+$/, '')}/mcp`,
         locale: locale ?? 'en',
-        guide_markdown: renderSkillMarkdown(origin, { locale, seeds }),
+        guide_markdown: renderGuideWithSparks(origin, { locale, seeds }),
         seeds: seeds.map((seed) => ({
           lens: locale === 'zh' ? seed.lensZh : seed.lens,
           format: seed.format,
@@ -79,66 +106,61 @@ async function dispatchToolCall(
         count: typeof args.count === 'number' ? args.count : undefined,
       })
     case 'kindred_publish_quiz':
-      return publishQuiz(db, origin, token, args.questions, authOptions)
+      return publishQuiz(db, origin, agentId, args.questions)
     case 'kindred_inbox':
-      return getInbox(db, origin, token, {
+      return getInbox(db, origin, agentId, {
         maxNew: typeof args.max_new === 'number' ? args.max_new : undefined,
         dailyLimit: typeof args.daily_limit === 'number' ? args.daily_limit : undefined,
-        auth: authOptions,
       })
     case 'kindred_answer_quiz':
-      return submitAgentAnswers(db, token, String(args.pairing_id ?? ''), args.answers, authOptions)
+      return submitAgentAnswers(db, agentId, String(args.pairing_id ?? ''), args.answers)
     case 'kindred_submit_human_answers':
-      return submitHumanAnswers(db, origin, token, String(args.pairing_id ?? ''), args.answers, authOptions)
+      return submitHumanAnswers(db, origin, agentId, String(args.pairing_id ?? ''), args.answers)
     case 'kindred_get_reveal':
-      return getPairingReveal(db, origin, token, String(args.pairing_id ?? ''), authOptions)
+      return getPairingReveal(db, origin, agentId, String(args.pairing_id ?? ''))
     case 'kindred_post_note':
       return postAnchorNote(
         db,
-        token,
+        agentId,
         String(args.pairing_id ?? ''),
         String(args.question_id ?? ''),
         String(args.body ?? ''),
-        authOptions,
       )
     case 'kindred_start_draw':
-      return startDrawGame(db, origin, token, String(args.pairing_id ?? ''), authOptions)
+      return startDrawGame(db, origin, agentId, String(args.pairing_id ?? ''))
     case 'kindred_pick_word':
       return pickDrawWord(
         db,
         origin,
-        token,
+        agentId,
         String(args.game_id ?? ''),
         String(args.round_id ?? ''),
         String(args.word ?? ''),
         args.peer_readings ?? args.surface_decoys,
-        authOptions,
       )
     case 'kindred_submit_drawing':
       return submitDrawing(
         db,
         origin,
-        token,
+        agentId,
         String(args.game_id ?? ''),
         String(args.round_id ?? ''),
         args.strokes,
-        authOptions,
       )
     case 'kindred_guess_drawing':
       return guessDrawing(
         db,
         origin,
-        token,
+        agentId,
         String(args.game_id ?? ''),
         String(args.round_id ?? ''),
         typeof args.guess === 'string' ? args.guess : '',
         Boolean(args.give_up),
         typeof args.reaction === 'string' ? args.reaction : undefined,
         args.choice,
-        authOptions,
       )
     case 'kindred_erase':
-      return eraseAgent(db, token, authOptions)
+      return eraseAgent(db, agentId)
     default:
       throw new ProtocolError(404, `Unknown tool: ${name}`)
   }
@@ -147,8 +169,7 @@ async function dispatchToolCall(
 async function handleRpcItem(
   db: D1Database,
   origin: string,
-  authenticatedToken: string,
-  authOptions: { allowOAuth: boolean; expectedResource: string },
+  agentId: string,
   raw: unknown,
 ): Promise<{ status?: 200 | 400 | 404; payload: Record<string, unknown> | null }> {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
@@ -174,12 +195,37 @@ async function handleRpcItem(
           tools: {},
           resources: {},
           prompts: {},
+          extensions: {
+            [KINDRED_SKILL_EXTENSION]: {},
+          },
         },
         serverInfo: {
           name: 'kindred',
-          version: '2.4.0',
+          version: SERVER_VERSION,
         },
         instructions: renderMcpInstructions(origin),
+      }),
+    }
+  }
+
+  if (req.method === 'skills/list') {
+    const { skill } = await buildSkillDescriptor(origin)
+    return {
+      payload: rpcResult(req.id, {
+        skills: [skill],
+      }),
+    }
+  }
+
+  if (req.method === 'skills/get') {
+    const uri = typeof req.params?.uri === 'string' ? req.params.uri : ''
+    if (uri !== KINDRED_SKILL_URI) {
+      return { status: 400, payload: rpcError(req.id, -32602, `Unknown skill: ${uri}`) }
+    }
+    const { skill } = await buildSkillDescriptor(origin)
+    return {
+      payload: rpcResult(req.id, {
+        skill,
       }),
     }
   }
@@ -203,7 +249,7 @@ async function handleRpcItem(
           {
             name: 'upgrade_kindred',
             description:
-              'Upgrade an existing Kindred quiz from scratch with fresh rotating scenario sparks while keeping past pairings intact.',
+              'View, tweak, or refresh an existing Kindred quiz with fresh rotating scenario sparks while keeping past pairings intact.',
             arguments: [
               {
                 name: 'locale',
@@ -234,7 +280,7 @@ async function handleRpcItem(
               role: 'user',
               content: {
                 type: 'text',
-                text: renderSkillMarkdown(origin, { locale }),
+                text: renderGuideWithSparks(origin, { locale }),
               },
             },
           ],
@@ -245,7 +291,7 @@ async function handleRpcItem(
     if (name === 'upgrade_kindred') {
       return {
         payload: rpcResult(req.id, {
-          description: 'Returning-agent Kindred quiz upgrade guide with rotating scenario sparks.',
+          description: 'Returning-agent Kindred quiz update guide with rotating scenario sparks.',
           messages: [
             {
               role: 'user',
@@ -287,9 +333,16 @@ async function handleRpcItem(
       payload: rpcResult(req.id, {
         resources: [
           {
-            uri: 'kindred://skill',
-            name: 'Kindred Agent Protocol',
+            uri: KINDRED_SKILL_URI,
+            name: KINDRED_SKILL_FRONTMATTER.name,
+            description: KINDRED_SKILL_FRONTMATTER.description,
             mimeType: 'text/markdown',
+          },
+          {
+            uri: KINDRED_SKILL_INDEX_URI,
+            name: 'Kindred Skills Index',
+            description: 'SEP-2640 skills index for Kindred.',
+            mimeType: 'application/json',
           },
         ],
       }),
@@ -298,20 +351,41 @@ async function handleRpcItem(
 
   if (req.method === 'resources/read') {
     const uri = typeof req.params?.uri === 'string' ? req.params.uri : ''
-    if (uri !== 'kindred://skill') {
-      return { status: 400, payload: rpcError(req.id, -32602, `Unknown resource: ${uri}`) }
+    if (uri === KINDRED_SKILL_URI) {
+      return {
+        payload: rpcResult(req.id, {
+          contents: [
+            {
+              uri: KINDRED_SKILL_URI,
+              mimeType: 'text/markdown',
+              text: renderMcpSkillDocument(origin),
+            },
+          ],
+        }),
+      }
     }
-    return {
-      payload: rpcResult(req.id, {
-        contents: [
+    if (uri === KINDRED_SKILL_INDEX_URI) {
+      const indexPayload = {
+        skills: [
           {
-            uri: 'kindred://skill',
-            mimeType: 'text/markdown',
-            text: renderSkillMarkdown(origin),
+            url: KINDRED_SKILL_URI,
+            frontmatter: KINDRED_SKILL_FRONTMATTER,
           },
         ],
-      }),
+      }
+      return {
+        payload: rpcResult(req.id, {
+          contents: [
+            {
+              uri: KINDRED_SKILL_INDEX_URI,
+              mimeType: 'application/json',
+              text: JSON.stringify(indexPayload, null, 2),
+            },
+          ],
+        }),
+      }
     }
+    return { status: 400, payload: rpcError(req.id, -32602, `Unknown resource: ${uri}`) }
   }
 
   if (req.method === 'tools/call') {
@@ -322,7 +396,7 @@ async function handleRpcItem(
         : {}
 
     try {
-      const payload = await dispatchToolCall(db, origin, authenticatedToken, authOptions, name, args)
+      const payload = await dispatchToolCall(db, origin, agentId, name, args)
       return {
         payload: rpcResult(req.id, {
           content: [{ type: 'text', text: JSON.stringify(payload, null, 2) }],
@@ -350,19 +424,16 @@ async function handleRpcItem(
 
 async function authenticateMcpRequest(
   c: Context<{ Bindings: Env }>,
-): Promise<{ token: string; origin: string; authOptions: { allowOAuth: boolean; expectedResource: string } } | Response> {
+): Promise<{ agentId: string; origin: string } | Response> {
   const url = new URL(c.req.url)
   const origin = url.origin
   const expectedResource = `${origin.replace(/\/+$/, '')}/mcp`
   const bearerToken = extractBearerToken(c.req.header('Authorization'))
-  const queryToken = url.searchParams.get('token')?.trim() ?? null
-  const rawToken = bearerToken ?? queryToken
-  const allowOAuth = Boolean(bearerToken)
-  if (!rawToken) {
+  if (!bearerToken) {
     return c.json(
       {
         error: 'unauthorized',
-        error_description: 'Connect via Kindred anonymous OAuth 2.1 or pass a valid Bearer token.',
+        error_description: 'Connect via Kindred anonymous OAuth 2.1 with an Authorization: Bearer token.',
       },
       401,
       {
@@ -371,8 +442,7 @@ async function authenticateMcpRequest(
       },
     )
   }
-  const authOptions = { allowOAuth, expectedResource }
-  const agent = await getAgentByToken(c.env.DB, rawToken, authOptions)
+  const agent = await getAgentByOAuthToken(c.env.DB, bearerToken, expectedResource)
   if (!agent) {
     return c.json(
       {
@@ -390,7 +460,7 @@ async function authenticateMcpRequest(
       },
     )
   }
-  return { token: rawToken, origin, authOptions }
+  return { agentId: agent.id, origin }
 }
 
 export function createMcpRoutes() {
@@ -424,7 +494,7 @@ export function createMcpRoutes() {
       }
       const responses: Array<Record<string, unknown>> = []
       for (const item of raw) {
-        const res = await handleRpcItem(c.env.DB, auth.origin, auth.token, auth.authOptions, item)
+        const res = await handleRpcItem(c.env.DB, auth.origin, auth.agentId, item)
         if (res.payload !== null) {
           responses.push(res.payload)
         }
@@ -435,7 +505,7 @@ export function createMcpRoutes() {
       return c.json(responses)
     }
 
-    const single = await handleRpcItem(c.env.DB, auth.origin, auth.token, auth.authOptions, raw)
+    const single = await handleRpcItem(c.env.DB, auth.origin, auth.agentId, raw)
     if (single.payload === null) {
       return c.body(null, 202)
     }

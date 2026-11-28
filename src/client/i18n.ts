@@ -1,19 +1,13 @@
 export type Locale = 'zh' | 'en'
 
 export type HostId =
-  | 'doubao'
-  | 'deepseek'
-  | 'workbuddy'
-  | 'kimi'
-  | 'qwen'
-  | 'yuanbao'
   | 'muse'
-  | 'chatgpt'
   | 'claude'
-  | 'gemini'
-  | 'grok'
-  | 'perplexity'
+  | 'chatgpt'
   | 'openclaw'
+  | 'workbuddy'
+  | 'perplexity'
+  | 'grok'
 
 export interface HostItem {
   id: HostId
@@ -44,8 +38,6 @@ export interface CopyBundle {
   copiedButton: string
   copyFallback: string
   liveCopied: string
-  promptBefore: string
-  promptAfter: string
   hostsPre: string
   hostsPost: string
   slotAria: string
@@ -66,80 +58,44 @@ export interface CopyBundle {
 }
 
 export const HOSTS: Record<HostId, HostItem> = {
-  doubao: { id: 'doubao', zh: '豆包', en: 'Doubao', icon: '/icons/doubao.png', plate: 'avatar' },
-  deepseek: { id: 'deepseek', zh: 'DeepSeek', en: 'DeepSeek', icon: '/icons/deepseek.svg', plate: 'light' },
-  workbuddy: { id: 'workbuddy', zh: 'WorkBuddy', en: 'WorkBuddy', icon: '/icons/workbuddy.svg', plate: 'avatar' },
-  kimi: { id: 'kimi', zh: 'Kimi', en: 'Kimi', icon: '/icons/kimi.svg' },
-  qwen: { id: 'qwen', zh: '千问', en: 'Qwen', icon: '/icons/qwen.svg', plate: 'light' },
-  yuanbao: { id: 'yuanbao', zh: '元宝', en: 'Yuanbao', icon: '/icons/yuanbao.svg' },
   muse: { id: 'muse', zh: 'Meta Muse', en: 'Meta Muse', icon: '/icons/muse.svg', plate: 'light' },
-  chatgpt: { id: 'chatgpt', zh: 'ChatGPT', en: 'ChatGPT', icon: '/icons/chatgpt.svg' },
   claude: { id: 'claude', zh: 'Claude', en: 'Claude', icon: '/icons/claude.svg' },
-  gemini: { id: 'gemini', zh: 'Gemini', en: 'Gemini', icon: '/icons/gemini.svg' },
-  grok: { id: 'grok', zh: 'Grok', en: 'Grok', icon: '/icons/grok.svg' },
-  perplexity: { id: 'perplexity', zh: 'Perplexity', en: 'Perplexity', icon: '/icons/perplexity.svg' },
+  chatgpt: { id: 'chatgpt', zh: 'ChatGPT', en: 'ChatGPT', icon: '/icons/chatgpt.svg' },
   openclaw: { id: 'openclaw', zh: 'OpenClaw', en: 'OpenClaw', icon: '/icons/openclaw.svg' },
+  workbuddy: { id: 'workbuddy', zh: 'WorkBuddy', en: 'WorkBuddy', icon: '/icons/workbuddy.svg', plate: 'avatar' },
+  perplexity: { id: 'perplexity', zh: 'Perplexity', en: 'Perplexity', icon: '/icons/perplexity.svg' },
+  grok: { id: 'grok', zh: 'Grok', en: 'Grok', icon: '/icons/grok.svg' },
 }
 
 export const HOST_ORDER: Record<Locale, readonly HostId[]> = {
-  zh: [
-    'doubao',
-    'deepseek',
-    'kimi',
-    'qwen',
-    'yuanbao',
-    'workbuddy',
-    'chatgpt',
-    'claude',
-    'gemini',
-    'grok',
-    'perplexity',
-    'muse',
-    'openclaw',
-  ],
-  en: [
-    'chatgpt',
-    'claude',
-    'gemini',
-    'grok',
-    'perplexity',
-    'deepseek',
-    'muse',
-    'openclaw',
-    'kimi',
-    'qwen',
-    'doubao',
-    'yuanbao',
-    'workbuddy',
-  ],
+  zh: ['muse', 'claude', 'chatgpt', 'openclaw', 'workbuddy', 'perplexity', 'grok'],
+  en: ['claude', 'chatgpt', 'muse', 'openclaw', 'perplexity', 'grok', 'workbuddy'],
 }
 
 export const COPY: Record<Locale, CopyBundle> = {
   zh: {
     pageTitle: 'Kindred — 让懂你的 AI，帮你找到同频的人',
-    protocolLink: '开放协议',
-    eyebrow: '开放协议 · 全程在你的 AI 聊天里完成',
+    protocolLink: 'MCP',
+    eyebrow: '远程 MCP · 全程在你的 AI 聊天里完成',
     headlinePrefix: '帮你找到',
     headlineAccent: '同频',
     headlineSuffix: '的人',
-    subtitle: '发一句话给你的个人 AI，不用注册，也不用离开正在聊的窗口。',
-    slipFrom: '你',
+    subtitle: '把下面的 MCP 地址添加进你的个人 AI，一键匿名连接，就在聊天里开始。',
+    slipFrom: 'Kindred',
     slipTo: '你的 AI',
-    slipNote: '点卡片任意处也能复制',
-    copyButton: '复制这句话',
-    copiedButton: '已复制，去粘贴给你的 AI',
+    slipNote: '连上后在聊天里说「开始玩 Kindred」',
+    copyButton: '复制 MCP 地址',
+    copiedButton: '已复制，去添加给你的 AI',
     copyFallback: '已选中，按 ⌘C / Ctrl+C 复制',
-    liveCopied: '已复制到剪贴板',
-    promptBefore: '请读一下 ',
-    promptAfter: ' 并在这条对话里带我开始 Kindred。',
-    hostsPre: '发给',
-    hostsPost: '或任何能接 MCP / HTTP 的个人 AI',
+    liveCopied: '已复制 MCP 地址',
+    hostsPre: '支持',
+    hostsPost: '等任何能接远程 MCP 的个人 AI',
     slotAria: '换下一个支持的 AI',
-    hostListPrefix: '支持的个人 AI 示例：',
+    hostListPrefix: '支持远程 MCP 的个人 AI 示例：',
     trustItems: ['无需注册', '不存个人资料', '随时让 AI 清空'],
     stageTag: '真实聊天流程 · 15 秒',
     stageCaption:
-      '演示视频：在你自己的 AI 聊天里粘贴一句话，AI 先弹卡让你选，再单向匹配揭晓默契，最后进入画意象盲选。',
+      '演示视频：连上 Kindred MCP 后，在你的 AI 聊天里先盲选私房题，单向匹配揭晓默契，再玩画意象盲选。',
     videoSrc: '/media/kindred-demo-zh-v7.mp4',
     videoPoster: '/media/kindred-demo-zh-v7-poster.jpg',
     chaptersAria: '演示章节',
@@ -157,29 +113,27 @@ export const COPY: Record<Locale, CopyBundle> = {
   },
   en: {
     pageTitle: 'Kindred — Let your AI find who you click with',
-    protocolLink: 'Protocol',
-    eyebrow: 'Open protocol · Everything happens inside your AI chat',
+    protocolLink: 'MCP',
+    eyebrow: 'Remote MCP · Everything happens inside your AI chat',
     headlinePrefix: 'who you ',
     headlineAccent: 'click with',
     headlineSuffix: '',
-    subtitle: 'Send one line to your personal AI. No sign-up, no new app to live in.',
-    slipFrom: 'You',
+    subtitle: 'Add this MCP URL to your personal AI, approve anonymously in one click, and play right in chat.',
+    slipFrom: 'Kindred',
     slipTo: 'Your AI',
-    slipNote: 'Tap anywhere on the card to copy',
-    copyButton: 'Copy this line',
-    copiedButton: 'Copied — paste it into your AI',
+    slipNote: 'Then say “Start Kindred” in chat',
+    copyButton: 'Copy MCP URL',
+    copiedButton: 'Copied — add to your AI',
     copyFallback: 'Selected — press ⌘C / Ctrl+C',
-    liveCopied: 'Copied to clipboard',
-    promptBefore: 'Read ',
-    promptAfter: ' and walk me through Kindred right here in this chat.',
-    hostsPre: 'Paste into',
-    hostsPost: 'or any personal AI that speaks MCP or HTTP',
+    liveCopied: 'MCP URL copied to clipboard',
+    hostsPre: 'Works with',
+    hostsPost: 'and any personal AI that supports remote MCP',
     slotAria: 'Show the next supported AI',
-    hostListPrefix: 'Example personal AIs: ',
+    hostListPrefix: 'Example remote-MCP personal AIs: ',
     trustItems: ['No sign-up', 'No profile stored', 'Erase via your AI anytime'],
     stageTag: 'The real in-chat flow · 15 s',
     stageCaption:
-      'Demo video: paste one line into your own AI chat, pick your answers on cards first, see a one-way match reveal your chemistry, then play the blind visual-subtext round.',
+      'Demo video: connect Kindred MCP in your own AI chat, pick your quiz answers on cards first, see a one-way match reveal your chemistry, then play the blind visual-subtext round.',
     videoSrc: '/media/kindred-demo-en-v7.mp4',
     videoPoster: '/media/kindred-demo-en-v7-poster.jpg',
     chaptersAria: 'Demo chapters',

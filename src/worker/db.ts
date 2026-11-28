@@ -75,61 +75,55 @@ export interface AnchorNoteItem {
   createdAt: string
 }
 
-export function isOAuthAgent(agent: AgentRow): boolean {
-  return agent.token_hash.startsWith('oauth_')
+export async function getAgentById(db: D1Database, agentId: string | null | undefined): Promise<AgentRow | null> {
+  if (!agentId) return null
+  const row = await db.prepare('SELECT * FROM agents WHERE id = ?').bind(agentId).first<AgentRow>()
+  return row ?? null
 }
 
-export async function getAgentByToken(
+export async function getAgentByOAuthToken(
   db: D1Database,
   rawToken: string | null | undefined,
-  options?: { allowOAuth?: boolean; expectedResource?: string },
+  expectedResource: string,
 ): Promise<AgentRow | null> {
   if (!rawToken) return null
   const trimmed = rawToken.trim()
   if (!trimmed) return null
   const hash = await sha256Hex(trimmed)
   const nowIso = new Date().toISOString()
-  let row = await db.prepare('SELECT * FROM agents WHERE token_hash = ?').bind(hash).first<AgentRow>()
-  if (!row && options?.allowOAuth && options.expectedResource) {
-    const oauthRow = await db
-      .prepare(
-        `SELECT a.*, t.resource AS oauth_resource, t.expires_at AS oauth_expires_at, t.revoked_at AS oauth_revoked_at
-         FROM oauth_tokens t
-         JOIN agents a ON a.id = t.agent_id
-         WHERE t.access_token_hash = ?`,
-      )
-      .bind(hash)
-      .first<
-        AgentRow & {
-          oauth_resource: string
-          oauth_expires_at: string
-          oauth_revoked_at: string | null
-        }
-      >()
-    if (
-      oauthRow &&
-      oauthRow.oauth_revoked_at === null &&
-      oauthRow.oauth_expires_at > nowIso &&
-      oauthRow.oauth_resource === options.expectedResource
-    ) {
-      row = {
-        id: oauthRow.id,
-        token_hash: oauthRow.token_hash,
-        quiz_ready: oauthRow.quiz_ready,
-        current_quiz_version: oauthRow.current_quiz_version,
-        skill_version: oauthRow.skill_version,
-        created_at: oauthRow.created_at,
-        last_seen_at: oauthRow.last_seen_at,
+  const oauthRow = await db
+    .prepare(
+      `SELECT a.*, t.resource AS oauth_resource, t.expires_at AS oauth_expires_at, t.revoked_at AS oauth_revoked_at
+       FROM oauth_tokens t
+       JOIN agents a ON a.id = t.agent_id
+       WHERE t.access_token_hash = ?`,
+    )
+    .bind(hash)
+    .first<
+      AgentRow & {
+        oauth_resource: string
+        oauth_expires_at: string
+        oauth_revoked_at: string | null
       }
-    }
+    >()
+  if (
+    !oauthRow ||
+    oauthRow.oauth_revoked_at !== null ||
+    oauthRow.oauth_expires_at <= nowIso ||
+    oauthRow.oauth_resource !== expectedResource
+  ) {
+    return null
   }
-  if (row) {
-    await db
-      .prepare('UPDATE agents SET last_seen_at = ? WHERE id = ?')
-      .bind(nowIso, row.id)
-      .run()
+  await db.prepare('UPDATE agents SET last_seen_at = ? WHERE id = ?').bind(nowIso, oauthRow.id).run()
+  return {
+    id: oauthRow.id,
+    token_hash: oauthRow.token_hash,
+    quiz_ready: oauthRow.quiz_ready,
+    current_quiz_version: oauthRow.current_quiz_version,
+    skill_version: oauthRow.skill_version,
+    created_at: oauthRow.created_at,
+    last_seen_at: nowIso,
   }
-  return row ?? null
 }
 
 export async function listQuestions(
